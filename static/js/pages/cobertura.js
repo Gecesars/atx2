@@ -183,6 +183,11 @@
             longitude: longitudeValue,
         };
 
+        const tiltField = formData.get('antennaTilt');
+        if (tiltField !== null && tiltField !== undefined && tiltField !== '') {
+            payload.antennaTilt = parseFloat(tiltField);
+        }
+
         if (latitudeDirection === 'S') {
             payload.latitude = `-${latitudeValue}`;
         }

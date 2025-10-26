@@ -1537,6 +1537,10 @@ def calculate_coverage():
         "colorbar_bounds": colorbar_bounds,
         "signal_level_dict": signal_level_dict,
         "field_unit": "dBµV/m",
+        "scale": {
+            "min": min_val,
+            "max": max_val,
+        },
         "gain_components": {
             "base_gain_dbi": ganho_pico_dBi,
             "horizontal_adjustment_db_min": float(np.nanmin(horizontal_gain_grid_db)) if np.ndim(horizontal_gain_grid_db) else 0.0,
@@ -1566,6 +1570,12 @@ def salvar_dados():
         user.total_loss        = float(data.get('Total_loss'))
         user.transmission_power= float(data.get('transmissionPower'))
         user.antenna_gain      = float(data.get('antennaGain'))
+        tilt_val = data.get('antennaTilt')
+        if tilt_val is not None and str(tilt_val).strip() != '':
+            try:
+                user.antenna_tilt = float(tilt_val)
+            except ValueError:
+                pass
         user.latitude          = float(data.get('latitude'))
         user.longitude         = float(data.get('longitude'))
         user.servico           = data.get('service')
@@ -1597,6 +1607,29 @@ def visualizar_dados_salvos():
         }
     return render_template('dados_salvos.html', dados_salvos=dados_salvos, image_data=image_data)
 
+@bp.route('/update-tilt', methods=['POST'])
+@login_required
+def update_tilt():
+    data = request.get_json() or {}
+    tilt = data.get('tilt')
+    direction = data.get('direction')
+    try:
+        user = User.query.get(current_user.id)
+        if not user:
+            return jsonify({'error': 'Usuário não encontrado.'}), 404
+        if tilt is not None and str(tilt).strip() != '':
+            user.antenna_tilt = float(tilt)
+        if direction is not None and str(direction).strip() != '':
+            user.antenna_direction = float(direction)
+        db.session.commit()
+        return jsonify({
+            'antennaTilt': user.antenna_tilt,
+            'antennaDirection': user.antenna_direction
+        }), 200
+    except (ValueError, SQLAlchemyError) as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc)}), 400
+
 @bp.route('/carregar-dados', methods=['GET'])
 @login_required
 def carregar_dados():
@@ -1614,6 +1647,7 @@ def carregar_dados():
             'Total_loss': user.total_loss,
             'transmissionPower': user.transmission_power,
             'antennaGain': user.antenna_gain,
+            'antennaTilt': user.antenna_tilt,
             'rxGain': user.rx_gain,
             'latitude': user.latitude,
             'longitude': user.longitude,

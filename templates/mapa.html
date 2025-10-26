@@ -1,1076 +1,151 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>Mapa de Cobertura</title>
-    <script>
-        // Define uma variável global JavaScript com o user_id
-        var userId = "{{ current_user.id }}";
-    </script>
-   
-   
-    <style>
-        body, html { height: 100%; margin: 0; padding: 0; }
+{% extends "layouts/base.html" %}
 
-        #sidebar {
-    position: absolute;
-    top: 100px;
-    left: 20px;
-    z-index: 1;
-    background-color: rgba(243, 238, 233, 0.894);
-    padding: 5px;
-    border-radius: 8px;
-    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
-    box-sizing: border-box;
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    width: 200px; /* Ajuste para uma largura mais estreita */
-}
+{% block title %}Mapa de Cobertura · ATX Coverage{% endblock %}
 
-#sidebar button,
-#sidebar input[type="number"] {
-    width: 100%; /* Faz com que preencham toda a largura da sidebar */
-    padding: 10px;
-    margin-bottom: 10px; /* Espaço entre os elementos */
-    box-sizing: border-box; /* Inclui o padding e border na largura total */
-}
+{% block extra_head %}
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/pages/map.css') }}">
+{% endblock %}
 
-#sidebar button {
-    background-color: #0056b3;
-    color: white;
-    border: none;
-    border-radius: 5px;
-    cursor: pointer;
-    font-size: 1em;
-}
+{% block content %}
+<section class="map-wrapper">
+    <aside class="map-panel" id="controlPanel">
+        <header class="panel-header">
+            <h2 class="panel-title">Planejamento Georreferenciado</h2>
+            <p class="panel-subtitle">Ajuste parâmetros, visualize o enlace e acompanhe o perfil profissional.</p>
+        </header>
 
-#sidebar button:hover {
-    background-color: #003d82;
-}
-
-#sidebar label {
-    display: block;
-    margin-top: 15px;
-    margin-bottom: 5px;
-    color: #333;
-}
-
-#sidebar input[type="number"] {
-    border: 1px solid #ccc;
-    border-radius: 3px;
-    font-size: 0.9em;
-}
-
-#sidebar input[type="number"]:focus {
-    border-color: #0056b3;
-    outline: none;
-}
-
-/* Estilo adicional para suportar diferentes dispositivos e telas */
-@media (max-width: 768px) {
-    #sidebar {
-        width: 100%; /* Ajusta a largura para 100% em dispositivos menores */
-    }
-}
-
-
-        
-#map {
-    position: relative; /* Posição relativa para que o mapa possa ter filhos posicionados absolutamente */
-    width: 100vw; /* Viewport width: 100% da largura da janela */
-    height: 100vh; /* Viewport height: 100% da altura da janela */
-    top: 0;
-    left: 0;
-    z-index: 0; /* Z-index padrão para estar sob a sidebar */
-}
-        /* Estilo da Janela Modal para Coordenadas */
-        .modal-dialog {
-    max-width: 600px; /* Limite a largura da modal */
-    margin: 30px auto; /* Centraliza a modal verticalmente e horizontalmente */
-}
-
-.modal-content {
-    padding: 20px; /* Adiciona padding dentro do conteúdo da modal */
-}
-
-.modal-body .form-group {
-    margin-bottom: 1rem; /* Espaçamento entre os grupos de formulário */
-}
-
-/* Estilos para os campos de entrada e seletores */
-.modal-body input[type="number"],
-.modal-body select {
-    width: auto; /* Restringe a largura dos inputs e selects */
-    display: inline-block; /* Alinha os elementos na mesma linha */
-    margin-right: 0.25rem; /* Espaçamento à direita dos elementos */
-}
-
-/* Especificamente para elementos de entrada de texto pequeno como graus, minutos e segundos */
-.modal-body .dms-input input[type="number"] {
-    width: 20%; /* Largura reduzida para graus, minutos e segundos */
-}
-
-.modal-body .direction-select {
-    width: 30%; /* Largura para o seletor de direção */
-}
-
-/* Botão de fechar personalizado */
-.close {
-    color: #fff; /* Cor do texto do botão de fechar */
-    opacity: 1; /* Faz o botão de fechar mais visível */
-}
-
-        /* Estilo da Janela Modal */
-        .modal { display: none; position: fixed; z-index: 2; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgb(247, 239, 239); background-color: rgba(247, 240, 240, 0.4); }
-        .modal-content { background-color: #696d74; margin: 5% auto; padding: 20px; border: 1px solid #c0bde2; width: 80%; height: 80% }
-        .close { color: #aaa; float: right; font-size: 28px; font-weight: bold; }
-        .close:hover, .close:focus { color: black; text-decoration: none; cursor: pointer; }
-        .highcharts-figure, .highcharts-data-table table { height: 80%; width: 100%; margin: 0 auto; }
-        .modal-controls { width: 100%; margin-top: 20px; display: flex; justify-content: space-around; }
-        .modal-controls input[type=range], .modal-controls input[type=text], .modal-controls button { flex: 1; }
-        .loader {
-        border: 16px solid #f3f3f3; /* Cor de fundo */
-        border-top: 16px solid #3498db; /* Cor do spinner */
-        border-radius: 50%;
-        width: 120px;
-        height: 120px;
-        animation: spin 2s linear infinite;
-        position: absolute; /* Centralizado no elemento pai */
-        top: 50%;
-        left: 50%;
-        margin: -60px 0 0 -60px; /* Desloca metade do tamanho para alinhar ao centro */
-    }
-
-    #spinner {
-        display: none; /* Inicialmente oculto */
-        position: fixed; /* Fixo na tela */
-        z-index: 999; /* Sobreposição sobre outros elementos */
-        left: 0;
-        top: 0;
-        width: 100%; /* Tamanho total da tela */
-        height: 100%;
-        overflow: show;
-        background-color: rgba(0,0,0,0.5); /* Semi-transparente */
-        display: flex;
-        align-items: center; /* Centraliza verticalmente */
-        justify-content: center; /* Centraliza horizontalmente */
-    }
-
-    @keyframes spin {
-        0% { transform: rotate(0deg); }
-        100% { transform: rotate(360deg); }
-    }
-    .back-button {
-            position: fixed;  /* Posicionamento fixo */
-            bottom: 20px;     /* 20 pixels do fundo da página */
-            right: 20px;      /* 20 pixels da direita da página */
-            background-color: #007bff; /* Cor de fundo azul */
-            color: white;     /* Texto na cor branca */
-            padding: 10px 20px; /* Padding para tornar o botão maior */
-            border: none;     /* Sem borda */
-            border-radius: 5px; /* Bordas arredondadas */
-            cursor: pointer;  /* Cursor de mão ao passar o mouse */
-        }
-        .back-button:hover {
-            background-color: #0056b3; /* Cor mais escura ao passar o mouse */
-        }
-
-.perfil-modal.modal {
-    display: none; 
-    position: fixed; 
-    z-index: 2; 
-    left: 0; 
-    top: 0; 
-    width: 100%; 
-    height: 100%; 
-    overflow: auto; 
-    background-color: rgba(247, 240, 240, 0.4);
-}
-
-.perfil-modal .modal-content {
-    background-color: #696d74; 
-    margin: 5% auto; 
-    padding: 20px; 
-    border: 1px solid #c0bde2; 
-    width: 90%; 
-    height: auto; /* Modifique para auto para que a altura seja baseada no conteúdo */
-}
-
-.perfil-modal .close {
-    color: #d70d0d; 
-    float: right; 
-    font-size: 28px; 
-    font-weight: bold;
-}
-
-.perfil-modal .close:hover, .perfil-modal .close:focus {
-    color: black; 
-    text-decoration: none; 
-    cursor: pointer;
-}
-
-.perfil-modal .highcharts-figure, .perfil-modal .highcharts-data-table table {
-    height: 100%; 
-    width: 100%; 
-    margin: auto;
-}
-
-.perfil-modal .modal-controls {
-    width: 100%; 
-    margin-top: 20px; 
-    display: flex; 
-    justify-content: space-around;
-}
-
-.perfil-modal .modal-controls input[type="range"], 
-.perfil-modal .modal-controls input[type="text"], 
-.perfil-modal .modal-controls button {
-    flex: 1;
-}
-
-
-
-    </style>
-</head>
-<body >
-    <!-- Janela Modal -->
-    <div id="perfilModal" class="modal perfil-modal">
-        <div class="modal-content">
-            <span class="close">&times;</span>
-            <figure class="highcharts-figure">
-                <div id="container"></div>
-            </figure>
-            <div class="modal-controls">
-                <input type="range" id="slider1">
-                <input type="range" id="slider2">
-                <input type="range" id="slider3">
-                <button id="btn1">Botão 1</button>
-                <button id="btn2">Botão 2</button>
-                <button id="btn3">Botão 3</button>
-                <input type="text" id="input1">
-                <input type="text" id="input2">
-            </div>
+        <div class="panel-card">
+            <h3 class="card-title">Estação Transmissora</h3>
+            <dl class="card-grid" id="txSummary">
+                <div>
+                    <dt>Latitude</dt>
+                    <dd id="txLat">-</dd>
+                </div>
+                <div>
+                    <dt>Longitude</dt>
+                    <dd id="txLng">-</dd>
+                </div>
+                <div>
+                    <dt>Frequência</dt>
+                    <dd id="txFreq">-</dd>
+                </div>
+                <div>
+                    <dt>Modelo</dt>
+                    <dd id="txModel">-</dd>
+                </div>
+            </dl>
         </div>
-    </div>
-    
-<div id="spinner" style="display: none;">
-    <!-- Exemplo de um spinner simples usando CSS -->
-    <div class="loader"></div>
-</div>
 
+        <div class="panel-card">
+            <h3 class="card-title">Cobertura</h3>
+            <label class="form-label" for="radiusInput">Raio de análise (km)</label>
+            <div class="input-group">
+                <input type="range" id="radiusInput" min="5" max="150" step="5" value="30">
+                <span class="input-value" id="radiusValue">30 km</span>
+            </div>
 
-    <div id="sidebar">
-        <button onclick="GerarMancha()">Gerar Mancha</button>
-        <button onclick="askForCoordinates()">Posicionar RX</button>
-        <button onclick="verPerfil()">Ver Perfil</button>
-        <button onclick="createSignalPolygons()">Criar Polígonos de Sinal</button>
-        <label for="raioCobertura">Distância Máxima (Km):</label>
-        <input type="number" id="raioCobertura" name="raioCobertura" min="0" placeholder="Insira o raio em Km">
-        <label for="minSignalLevel">Valor Mínimo do Sinal (dBm):</label>
-        <input type="number" id="minSignalLevel" name="minSignalLevel" placeholder="Valor mínimo dBm">
-        <label for="maxSignalLevel">Valor Máximo do Sinal (dBm):</label>
-        <input type="number" id="maxSignalLevel" name="maxSignalLevel" placeholder="Valor máximo dBm">
-        
+            <div class="dual-input">
+                <div>
+                    <label class="form-label" for="minField">Min dBµV/m</label>
+                    <input type="number" id="minField" placeholder="auto" step="0.1">
+                </div>
+                <div>
+                    <label class="form-label" for="maxField">Max dBµV/m</label>
+                    <input type="number" id="maxField" placeholder="auto" step="0.1">
+                </div>
+            </div>
+
+            <button class="btn btn-brand w-100" id="btnGenerateCoverage">Gerar cobertura</button>
+        </div>
+
+        <div class="panel-card">
+            <h3 class="card-title">Ajuste de Tilt</h3>
+            <label class="form-label" for="tiltControl">Tilt elétrico TX (°)</label>
+            <div class="input-group">
+                <input type="range" id="tiltControl" min="-10" max="30" step="0.5" value="0">
+                <span class="input-value" id="tiltValue">0°</span>
+            </div>
+            <p class="assist-text">O ganho vertical é recalculado em E/Emax (θ = 0°) para o perfil de cobertura.</p>
+        </div>
+
+        <div class="panel-card">
+            <h3 class="card-title">Resumo de Ganho</h3>
+            <dl class="card-grid" id="gainSummary">
+                <div>
+                    <dt>Ganho base</dt>
+                    <dd id="gainBase">-</dd>
+                </div>
+                <div>
+                    <dt>Horizontal (min/max)</dt>
+                    <dd id="gainHorizontal">-</dd>
+                </div>
+                <div>
+                    <dt>Vertical (θ=0)</dt>
+                    <dd id="gainVertical">-</dd>
+                </div>
+                <div>
+                    <dt>Escala</dt>
+                    <dd id="fieldScale">-</dd>
+                </div>
+            </dl>
+        </div>
+
+        <div class="panel-card">
+            <h3 class="card-title">Perfil Profissional</h3>
+            <p class="assist-text">Selecione um ponto RX no mapa para visualizar o perfil com Fresnel e curvatura.</p>
+            <button class="btn btn-outline-primary w-100" id="btnGenerateProfile" disabled>Gerar perfil do enlace</button>
+        </div>
+
+        <div class="panel-card">
+            <h3 class="card-title">Ligação TX ↔ RX</h3>
+            <dl class="card-grid" id="linkSummary">
+                <div>
+                    <dt>Distância</dt>
+                    <dd id="linkDistance">-</dd>
+                </div>
+                <div>
+                    <dt>Direção</dt>
+                    <dd id="linkBearing">-</dd>
+                </div>
+                <div>
+                    <dt>Campo estimado</dt>
+                    <dd id="linkField">-</dd>
+                </div>
+                <div>
+                    <dt>Terreno RX</dt>
+                    <dd id="linkElevation">-</dd>
+                </div>
+            </dl>
+        </div>
+
+        <div class="colorbar-card" id="colorbarCard" hidden>
+            <img id="colorbarImage" alt="Colorbar cobertura" />
+        </div>
+    </aside>
+
+    <div class="map-canvas">
+        <div id="coverageMap" class="map-container"></div>
+        <div class="map-floating-card" id="mapTooltip" hidden></div>
     </div>
-    </div>
-    <div id="map"></div>
-     <!-- Modal para coordenadas -->
-    
-<div class="modal modal-coordinates fade" id="coordinatesModal" tabindex="-1" role="dialog" aria-labelledby="coordinatesModalLabel" aria-hidden="true">
-    <div class="modal-dialog role="document">
-        <div class="modal-content modal-coordinates-content">
+</section>
+
+<!-- Modal Perfil -->
+<div class="modal fade" id="profileModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title" id="coordinatesModalLabel">Coordenadas do receptor</h5>
-                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-                    <span aria-hidden="true">&times;</span>
-                </button>
+                <h5 class="modal-title">Perfil de Enlace</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
             </div>
             <div class="modal-body">
-                                   <!-- Corpo da Modal aqui -->
-                                   <div class="form-group">
-                                    <label for="latitudeDecimal">Latitude (Decimal):</label>
-                                    <input type="number" id="latitudeDecimal" name="latitudeDecimal" class="form-control" min="-90" max="90" oninput="updateDMS('latitudeDecimal', 'latitudeDegrees', 'latitudeMinutes', 'latitudeSeconds', 'latitudeDirection')">
-                                </div>
-                                <div class="form-group dms-input">
-                                    <input type="number" id="latitudeDegrees" name="latitudeDegrees" class="form-control" min="-90" max="90" placeholder="Graus" oninput="updateDecimal('latitudeDegrees', 'latitudeMinutes', 'latitudeSeconds', 'latitudeDirection', 'latitudeDecimal')">
-                                    <input type="number" id="latitudeMinutes" name="latitudeMinutes" class="form-control" min="0" max="59" placeholder="Minutos" oninput="updateDecimal('latitudeDegrees', 'latitudeMinutes', 'latitudeSeconds', 'latitudeDirection', 'latitudeDecimal')">
-                                    <input type="number" id="latitudeSeconds" name="latitudeSeconds" class="form-control" min="0" max="59" placeholder="Segundos" oninput="updateDecimal('latitudeDegrees', 'latitudeMinutes', 'latitudeSeconds', 'latitudeDirection', 'latitudeDecimal')">
-                                    <select name="latitudeDirection" id="latitudeDirection" class="form-control direction-select" onchange="updateDecimal('latitudeDegrees', 'latitudeMinutes', 'latitudeSeconds', 'latitudeDirection', 'latitudeDecimal')">
-                                        <option value="N">Norte</option>
-                                        <option value="S">Sul</option>
-                                    </select>
-                                </div>
-                                <div class="form-group">
-                                    <label for="longitudeDecimal">Longitude (Decimal):</label>
-                                    <input type="number" id="longitudeDecimal" name="longitudeDecimal" class="form-control" min="-180" max="180" oninput="updateDMS('longitudeDecimal', 'longitudeDegrees', 'longitudeMinutes', 'longitudeSeconds', 'longitudeDirection')">
-                                </div>
-                                <div class="form-group dms-input">
-                                    <input type="number" id="longitudeDegrees" name="longitudeDegrees" class="form-control" min="-180" max="180" placeholder="Graus" oninput="updateDecimal('longitudeDegrees', 'longitudeMinutes', 'longitudeSeconds', 'longitudeDirection', 'longitudeDecimal')">
-                                    <input type="number" id="longitudeMinutes" name="longitudeMinutes" class="form-control" min="0" max="59" placeholder="Minutos" oninput="updateDecimal('longitudeDegrees', 'longitudeMinutes', 'longitudeSeconds', 'longitudeDirection', 'longitudeDecimal')">
-                                    <input type="number" id="longitudeSeconds" name="longitudeSeconds" class="form-control" min="0" max="59" placeholder="Segundos" oninput="updateDecimal('longitudeDegrees', 'longitudeMinutes', 'longitudeSeconds', 'longitudeDirection', 'longitudeDecimal')">
-                                    <select name="longitudeDirection" id="longitudeDirection" class="form-control direction-select" onchange="updateDecimal('longitudeDegrees', 'longitudeMinutes', 'longitudeSeconds', 'longitudeDirection', 'longitudeDecimal')">
-                                        <option value="W">Oeste</option>
-                                        <option value="E">Leste</option>
-                                    </select>
-                                </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-primary" onclick="saveCoordinates()">Posicionar RX</button>
+                <img id="profileImage" alt="Perfil de enlace" class="profile-image" />
             </div>
         </div>
     </div>
 </div>
-
-
-
-<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.0.6/dist/umd/popper.min.js"></script>
-<script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/dom-to-image@2.6.0/dist/dom-to-image.min.js"></script>
-
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-<script src="https://code.highcharts.com/highcharts.js"></script>
-<script src="https://maps.googleapis.com/maps/api/js?key={{ maps_api_key }}&libraries=visualization,geometry&callback=initMap" async defer></script>
-
-    
-
-
-    <script>
-        let map;
-        let coords_RX;
-        let distance;
-        var coverageLayer; // This is now accessible in any function below this declaration.
-        var globalSignalLevels = null;  
-        var globalSignalLevels_2 = null;// Guardará os níveis de sinal globalmente
-        let towerMarker;
-        let towerInfoWindow;
-        var towerERP = null;
-        var towerElevation = null;
-        // Assuma que startCoords é injetado pelo Flask corretamente
-        let startCoords = {{ start_coords|tojson }};
-        
-        function updateDMS(decimalFieldId, degreesFieldId, minutesFieldId, secondsFieldId, directionFieldId) {
-            const decimalValue = parseFloat(document.getElementById(decimalFieldId).value);
-            const sign = Math.sign(decimalValue);
-            const absoluteValue = Math.abs(decimalValue);
-
-            let degrees = Math.floor(absoluteValue);
-            const fractionalPart = absoluteValue - degrees;
-            let minutes = Math.floor(fractionalPart * 60);
-            const seconds = Math.round((fractionalPart * 3600) % 60);
-
-            if (minutes === 60) {
-                degrees++;
-                minutes = 0;
-            }
-
-            document.getElementById(degreesFieldId).value = degrees * sign;
-            document.getElementById(minutesFieldId).value = minutes;
-            document.getElementById(secondsFieldId).value = seconds;
-
-            const direction = sign === 1 ? 'N' : 'S';
-            document.getElementById(directionFieldId).value = direction;
-        }
-
-        function updateDecimal(degreesFieldId, minutesFieldId, secondsFieldId, directionFieldId, decimalFieldId) {
-            const degrees = parseFloat(document.getElementById(degreesFieldId).value) || 0;
-            const minutes = parseFloat(document.getElementById(minutesFieldId).value) || 0;
-            const seconds = parseFloat(document.getElementById(secondsFieldId).value) || 0;
-            const direction = document.getElementById(directionFieldId).value === 'N' || document.getElementById(directionFieldId).value === 'E' ? 1 : -1;
-            const decimalValue = degrees + (minutes / 60) + (seconds / 3600);
-            document.getElementById(decimalFieldId).value = (decimalValue * direction).toFixed(6);
-        }
-
-        function saveCoordinates() {
-    const latitudeDecimal = parseFloat(document.getElementById("latitudeDecimal").value);
-    const latitudeDirection = document.getElementById("latitudeDirection").value;
-    const longitudeDecimal = parseFloat(document.getElementById("longitudeDecimal").value);
-    const longitudeDirection = document.getElementById("longitudeDirection").value;
-
-    if (!isNaN(latitudeDecimal) && !isNaN(longitudeDecimal)) {
-        const lat = latitudeDirection === 'N' ? Math.abs(latitudeDecimal) : -Math.abs(latitudeDecimal);
-        const lng = longitudeDirection === 'E' ? Math.abs(longitudeDecimal) : -Math.abs(longitudeDecimal);
-
-        const location = new google.maps.LatLng(lat, lng);
-
-        // Verifica se já existe um marcador RX e o remove
-        if (coords_RX) {
-            coords_RX.setMap(null);
-        }
-
-        // Cria um novo marcador RX com as coordenadas fornecidas
-        coords_RX = new google.maps.Marker({
-            position: location,
-            map: map,
-            title: "RX",
-            zIndex: 1000
-        });
-
-        // Solicita a elevação para o ponto especificado
-        var elevator = new google.maps.ElevationService();
-        elevator.getElevationForLocations({
-            'locations': [location]
-        }, function(results, status) {
-            if (status === 'OK' && results[0]) {
-                const elevation = results[0].elevation;
-                calculateDistance(startCoords, location).then(distance => {
-                    let contentString = `
-                        <div>
-                            <p><strong>Coordenadas:</strong> Lat: ${lat.toFixed(6)}, Lng: ${lng.toFixed(6)}</p>
-                            <p><strong>Distância até TX:</strong> ${(distance / 1000).toFixed(2)} Km</p>
-                            <p><strong>Elevação do Terreno:</strong> ${elevation.toFixed(2)} metros</p>
-                        `;
-
-                    if (window.coverageOverlay && pointInsideImage(location, window.coverageOverlay)) {
-                        const signalLevel = getClosestSignalLevel(lat, lng, globalSignalLevels);
-                        const signal_dbu = signalLevel + 107;
-                        contentString += `<p><strong>Nível de Sinal:</strong> ${signalLevel.toFixed(2)} dBm ${signal_dbu.toFixed(2)} dBμV/m</p>`;
-                    } else {
-                        contentString += `<p><strong>Aviso:</strong> Cobertura ainda não gerada ou ponto fora da cobertura</p>`;
-                    }
-                    contentString += '</div>';
-                    const infowindow = new google.maps.InfoWindow({ content: contentString });
-                    infowindow.open(map, coords_RX);
-                });
-            } else {
-                console.error('Elevation service failed due to: ' + status);
-            }
-        });
-
-        // Fecha a modal de coordenadas
-        $('#coordinatesModal').modal('hide');
-
-        // Centraliza o mapa no marcador RX
-        map.setCenter(location);
-    } else {
-        alert('Por favor, preencha todas as coordenadas corretamente.');
-    }
-}
-
-
-
-
-function initMap() {
-    map = new google.maps.Map(document.getElementById('map'), {
-        center: startCoords,
-        zoom: 13
-    });
-
-    towerMarker = new google.maps.Marker({
-        position: startCoords,
-        map: map,
-        icon: { url: '/static/tx.png', scaledSize: new google.maps.Size(25, 25) },
-        title: "Torre de Transmissão"
-    });
-
-  //  towerInfoWindow = new google.maps.InfoWindow();
-  //  towerInfoWindow.open(map, towerMarker);
-
-    // Chama a função para carregar dados e calcular ERP
-   // loadAndCalculateData();
-
-    // Inicializa o serviço de elevação e obtém a elevação do terreno
-   // var elevator = new google.maps.ElevationService();
-   // getElevation(elevator, startCoords);
-}
-
-function loadAndCalculateData() {
-    fetch('/carregar-dados')
-    .then(response => response.json())
-    .then(data => {
-        const transmissionPower = parseFloat(data.transmissionPower);
-        const antennaGain = parseFloat(data.antennaGain);
-        const totalLoss = parseFloat(data.Total_loss);
-        towerERP = 10 * Math.log10(transmissionPower / 0.001) + antennaGain - totalLoss;
-    })
-    .catch(error => console.error('Erro ao carregar os dados:', error));
-}
-
-function getElevation(elevator, location) {
-    elevator.getElevationForLocations({
-        'locations': [location]
-    }, function(results, status) {
-        if (status === 'OK') {
-            // Checa se a resposta foi bem sucedida
-            if (results[0]) {
-                towerElevation = results[0].elevation; // Atribui a elevação
-                updateMapInfo();
-            } else {
-                console.error('No results found');
-            }
-        } else {
-            console.error('Elevation service failed due to: ' + status);
-        }
-    });
-}
-
-function updateMapInfo() {
-    const contentString = `
-        <div>
-            <h3>Torre de Transmissão</h3>
-            <p><strong>Coordenadas:</strong> Lat: ${startCoords.lat.toFixed(4)}, Lng: ${startCoords.lng.toFixed(4)}</p>
-            <p><strong>ERP:</strong> ${towerERP ? towerERP.toFixed(2) + ' dBm' : 'Carregando...'}</p>
-            <p><strong>Elevação do Terreno:</strong> ${towerElevation ? towerElevation.toFixed(2) + ' metros' : 'Carregando...'}</p>
-        </div>
-    `;
-    towerInfoWindow.setContent(contentString);
-}
-
-    function posicionarRX() {
-    alert("Clique no mapa para adicionar o RX.");
-    if (window.coverageOverlay) {
-        window.coverageOverlay.set('clickable', false);
-    }
-    
-    // Cria uma instância do serviço de elevação
-    var elevator = new google.maps.ElevationService();
-
-    // Listener para o próximo clique no mapa
-    map.addListener('click', function(e) {
-        // Verifica se já existe um marcador RX e o remove
-        if (coords_RX) {
-            coords_RX.setMap(null);
-        }
-
-        // Adiciona um novo marcador RX na posição clicada
-        coords_RX = new google.maps.Marker({
-            position: e.latLng,
-            map: map,
-            title: "RX",
-            zIndex: 1000
-        });
-
-        const lat = e.latLng.lat();
-        const lng = e.latLng.lng();
-
-        // Solicita a elevação para o ponto clicado
-        elevator.getElevationForLocations({
-            'locations': [e.latLng]
-        }, function(results, status) {
-            if (status === 'OK') {
-                // Se a solicitação foi bem-sucedida, proceda com o cálculo da distância e mostre as informações
-                if (results[0]) {
-                    const elevation = results[0].elevation;
-                    calculateDistance(startCoords, e.latLng).then(distance => {
-                        let contentString = `
-                            <div>
-                                <p><strong>Coordenadas:</strong> Lat: ${lat.toFixed(6)}, Lng: ${lng.toFixed(6)}</p>
-                                <p><strong>Distância até TX:</strong> ${(distance / 1000).toFixed(2)} Km</p>
-                                <p><strong>Elevação do Terreno:</strong> ${elevation.toFixed(2)} metros</p>
-                            </div>
-                        `;
-
-                        if (window.coverageOverlay && pointInsideImage(e.latLng, window.coverageOverlay)) {
-                            const signalLevel = getClosestSignalLevel(lat, lng, globalSignalLevels);
-                            const signal_dbu = signalLevel + 107;
-                            contentString += `<p><strong>Nível de Sinal:</strong> ${signalLevel.toFixed(2)} dBm / ${signal_dbu} dBμV/m</p>`;
-                        } else {
-                            contentString += `<p><strong>Aviso:</strong> Cobertura ainda não gerada ou ponto fora da cobertura</p>`;
-                        }
-
-                        const infowindow = new google.maps.InfoWindow({ content: contentString });
-                        infowindow.open(map, coords_RX);
-                    });
-                } else {
-                    console.error('No results found');
-                }
-            } else {
-                console.error('Elevation service failed due to: ' + status);
-            }
-        });
-
-        // Remova o listener após adicionar o marcador para evitar múltiplos marcadores RX
-        google.maps.event.clearListeners(map, 'click');
-    });
-}
-
-
-     function pointInsideImage(latLng, overlay) {
-       let bounds = overlay.getBounds();
-       return bounds.contains(latLng);
-    }
-       
-      //  function calculateDistance(start, end) {
-      //  fetch('/calculate-distance', {
-      // method: 'POST',
-      //  headers: {
-       //     'Content-Type': 'application/json',
-       // },
-      //  body: JSON.stringify({
-       //     start: start,
-       //     end: end
-       // })
-   // })
-   // .then(response => response.json())
-    //.then(data => {
-    //    if (data.distance) {
-   ///         distance = data.distance;
-      //      console.log("Distância calculada: ", distance, "metros");
-            // Aqui você pode atualizar a UI ou guardar a distância para uso posterior
-      //  } else {
-    //       console.error("Não foi possível calcular a distância.", data.error);
-       // }
-   // })
-   // .catch(error => console.error("Erro na requisição /calculate-distance", error));
-   // }
-        
-   function askForCoordinates() {
-            const choice = confirm("Deseja posicionar o RX manualmente ou cancelar para entrar com as coordenadas?");
-            if (!choice) {
-                $('#coordinatesModal').modal('show');
-            } else {
-                alert("Clique no mapa para adicionar o RX.");
-    if (window.coverageOverlay) {
-        window.coverageOverlay.set('clickable', false);
-    }
-    
-    // Cria uma instância do serviço de elevação
-    var elevator = new google.maps.ElevationService();
-
-    // Listener para o próximo clique no mapa
-    map.addListener('click', function(e) {
-        // Verifica se já existe um marcador RX e o remove
-        if (coords_RX) {
-            coords_RX.setMap(null);
-        }
-
-        // Adiciona um novo marcador RX na posição clicada
-        coords_RX = new google.maps.Marker({
-            position: e.latLng,
-            map: map,
-            title: "RX",
-            zIndex: 1000
-        });
-
-        const lat = e.latLng.lat();
-        const lng = e.latLng.lng();
-
-        // Solicita a elevação para o ponto clicado
-        elevator.getElevationForLocations({
-            'locations': [e.latLng]
-        }, function(results, status) {
-            if (status === 'OK') {
-                // Se a solicitação foi bem-sucedida, proceda com o cálculo da distância e mostre as informações
-                if (results[0]) {
-                    const elevation = results[0].elevation;
-                    calculateDistance(startCoords, e.latLng).then(distance => {
-                        let contentString = `
-                            <div>
-                                <p><strong>Coordenadas:</strong> Lat: ${lat.toFixed(6)}, Lng: ${lng.toFixed(6)}</p>
-                                <p><strong>Distância até TX:</strong> ${(distance / 1000).toFixed(2)} Km</p>
-                                <p><strong>Elevação do Terreno:</strong> ${elevation.toFixed(2)} metros</p>
-                            </div>
-                        `;
-
-                        if (window.coverageOverlay && pointInsideImage(e.latLng, window.coverageOverlay)) {
-                            const signalLevel = getClosestSignalLevel(lat, lng, globalSignalLevels);
-                            const signal_dbu = signalLevel + 107;
-                            contentString += `<p><strong>Nível de Sinal:</strong> ${signalLevel.toFixed(2)} dBm ${signal_dbu.toFixed(2)} dBμV/m</p>`;
-                        } else {
-                            contentString += `<p><strong>Aviso:</strong> Cobertura ainda não gerada ou ponto fora da cobertura</p>`;
-                        }
-
-                        const infowindow = new google.maps.InfoWindow({ content: contentString });
-                        infowindow.open(map, coords_RX);
-                    });
-                } else {
-                    console.error('No results found');
-                }
-            } else {
-                console.error('Elevation service failed due to: ' + status);
-            }
-        });
-
-        // Remova o listener após adicionar o marcador para evitar múltiplos marcadores RX
-        google.maps.event.clearListeners(map, 'click');
-    });
-                console.log("Posicionamento manual ativado.");
-            }
-        }
-
-
-
-
-   function verPerfil() {
-    // Verifique se as coordenadas do RX estão definidas
-    if (!coords_RX) {
-        alert("Por favor, posicione o RX antes de tentar ver o perfil.");
-        return;
-    }
-
-    const rxPosition = coords_RX.getPosition();
-    const path = [
-        { lat: startCoords.lat, lng: startCoords.lng },
-        { lat: rxPosition.lat(), lng: rxPosition.lng() }
-    ];
-    var raio = document.getElementById('raioCobertura').value;
-    // Prepare os dados para enviar ao servidor
-    const postData = {
-        path: path,
-        radius: raio
-        // Inclua quaisquer outros dados necessários pelo servidor
-    };
-    document.getElementById('spinner').style.display = 'block';
-    // Faça a solicitação POST para a rota /gerar_img_perfil
-    fetch('/gerar_img_perfil', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(postData)
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data && data.image) {
-            // Substitua o conteúdo da div container pelo gráfico retornado pelo servidor
-            const container = document.getElementById('container');
-            container.innerHTML = ''; // Limpa o conteúdo anterior
-            const img = new Image();
-            img.src = 'data:image/png;base64,' + data.image; // Supondo que a imagem esteja codificada em base64
-            container.appendChild(img);
-
-            // Mostra a janela modal com a imagem do perfil
-            document.getElementById('perfilModal').style.display = 'block';
-            document.getElementById('spinner').style.display = 'none';
-        } else {
-            throw new Error("Dados do perfil de elevação não recebidos corretamente.");
-            document.getElementById('spinner').style.display = 'none';
-
-        }
-    })
-    .catch(error => {
-        console.error('Erro ao buscar dados de perfil:', error);
-        document.getElementById('spinner').style.display = 'none';
-    });
-}
-
-// Fechar a janela modal
-document.querySelector('.close').onclick = function() {
-    document.getElementById('perfilModal').style.display = 'none';
-};
-
-
-    function getClosestSignalLevel(lat, lng, signalLevels) {
-    let closestLevel = "No data";  // Valor padrão caso nenhum nível de sinal seja encontrado
-    let minDistance = Number.MAX_VALUE;  // Inicializa com a maior distância possível
-
-    // Cria um objeto LatLng para as coordenadas do marcador
-    let markerLatLng = new google.maps.LatLng(lat, lng);
-
-    // Itera através das chaves do dicionário de níveis de sinal
-    for (let key in signalLevels) {
-        // A chave está no formato "(lat, lng)", extrai as coordenadas da string
-        let coords = key.match(/\(([^)]+)\)/)[1].split(',');
-        let latKey = parseFloat(coords[0]);
-        let lngKey = parseFloat(coords[1]);
-
-        // Cria um objeto LatLng para as coordenadas da chave
-        let keyLatLng = new google.maps.LatLng(latKey, lngKey);
-
-        // Calcula a distância esférica entre o marcador e a chave
-        let distance = google.maps.geometry.spherical.computeDistanceBetween(markerLatLng, keyLatLng);
-
-        // Verifica se a distância calculada é a menor encontrada
-        if (distance < minDistance) {
-            minDistance = distance;
-            closestLevel = signalLevels[key];
-        }
-    }
-
-    return closestLevel;
-}
-
-
-
-
-  
-function calculateDistance(start, end) {
-    return new Promise(resolve => {
-        if (!start || !end) {
-            console.error('Start or end coordinates are undefined');
-            resolve(NaN);
-            return;
-        }
-
-        // Verifica se start e end são objetos LatLng ou precisam ser convertidos
-        const startLatLng = (start instanceof google.maps.LatLng) ? start : new google.maps.LatLng(start.lat, start.lng);
-        const endLatLng = (end instanceof google.maps.LatLng) ? end : new google.maps.LatLng(end.lat, end.lng);
-
-        // Calcula a distância
-        const distance = google.maps.geometry.spherical.computeDistanceBetween(startLatLng, endLatLng);
-        if (distance) {
-            resolve(distance);
-        } else {
-            console.error('Failed to calculate distance', startLatLng, endLatLng);
-            resolve(NaN);
-        }
-    });
-}
-
-    function GerarMancha() {
-    var raio = document.getElementById('raioCobertura').value;
-    var minSignalLevel = document.getElementById('minSignalLevel').value;
-    var maxSignalLevel = document.getElementById('maxSignalLevel').value;
-
-    if (!raio) {
-        alert("Por favor, insira a distância máxima em Km.");
-        return; // Encerra a função se o raio não for fornecido
-    }
-
-    // Verifica se o raio inserido é um número válido
-    raio = Number(raio);
-    if (isNaN(raio) || raio <= 0) {
-        alert("Por favor, insira um valor válido para a distância.");
-        return;
-    }
-
-    var data = {
-        radius: raio,
-        minSignalLevel: minSignalLevel || null, // Usa null se o campo estiver vazio
-        maxSignalLevel: maxSignalLevel || null  // Usa null se o campo estiver vazio
-    };
-    // Exibe o spinner
-    document.getElementById('spinner').style.display = 'block';
-
-    // Prepara os dados para a requisição, incluindo o raio
-   
-
-    // Faz a requisição para o servidor
-    fetch('/calculate-coverage', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(data)
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.image && data.bounds && data.signal_level_dict && data.colorbar_bounds) {
-            // Converte a imagem base64 em uma URL
-           // globalSignalLevels_2 = data.signal_level_dict;
-            globalSignalLevels = data.signal_level_dict;
-           // createSignalPolygons(globalSignalLevels)
-          //  console.log(data.colorbar_bounds)
-          //console.log(globalSignalLevels);
-            const imageUrl = `data:image/png;base64,${data.image}`;
-            const colorbarUrl = `data:image/png;base64,${data.colorbar}`;
-            // Cria os objetos LatLng para os cantos sudoeste e nordeste
-            const southWest = new google.maps.LatLng(data.bounds.south, data.bounds.west);
-            const northEast = new google.maps.LatLng(data.bounds.north, data.bounds.east);
-
-            // Cria o LatLngBounds com os cantos sudoeste e nordeste
-            
-            // Cria os objetos LatLng para os cantos sudoeste e nordeste da colorbar
-            const colorbarSouthWest = new google.maps.LatLng(data.colorbar_bounds.south, data.colorbar_bounds.west);
-            const colorbarNorthEast = new google.maps.LatLng(data.colorbar_bounds.north, data.colorbar_bounds.east);
-
-            // Remove o overlay anterior, se existir
-            if (window.coverageOverlay) {
-                window.coverageOverlay.setMap(null);
-            }
-            if (window.colorbarOverlay) {
-            window.colorbarOverlay.setMap(null);
-            }
-
-            // Adiciona a imagem como um overlay no mapa
-            window.coverageOverlay = new google.maps.GroundOverlay(imageUrl, data.bounds, {
-                opacity: 0.5,
-                clickable: false  // Define a propriedade clickable como false
-            });
-            window.coverageOverlay.setMap(map);
-            window.coverageOverlay.setOpacity(0.5); // Ajuste inicial de transparência
-
-
-                        // Adiciona a colorbar acima da mancha
-          //  const colorbarHeight = 0.01; // Altura aproximada da colorbar em graus
-           // const colorbarBounds = new google.maps.LatLngBounds(
-            //    new google.maps.LatLng(data.bounds.north, data.bounds.west),
-              //  new google.maps.LatLng(data.bounds.north + colorbarHeight, data.bounds.east)
-          //  );
-
-          //console.log("Colorbar URL:", colorbarUrl);
-         // console.log("Colorbar Bounds:", data.colorbar_bounds);
-
-          const radiusToHeightRatio = 0.33 / 100; // Altura em graus por km
-          const minHeight = raio * radiusToHeightRatio; // Usar o raio da cobertura fornecido nos dados
-
-          const colorbarNorth = data.colorbar_bounds.north;
-          const colorbarSouth = data.colorbar_bounds.south;
-
-         // Assegure que há uma altura mínima
-         if (colorbarNorth - colorbarSouth < minHeight) {
-         const midPoint = (colorbarNorth + colorbarSouth) / 2;
-         data.colorbar_bounds.north = midPoint + (minHeight / 2);
-         data.colorbar_bounds.south = midPoint - (minHeight / 2);
-   }
-
-         const colorbarBounds = new google.maps.LatLngBounds(
-         new google.maps.LatLng(data.colorbar_bounds.south, data.colorbar_bounds.west),
-         new google.maps.LatLng(data.colorbar_bounds.north, data.colorbar_bounds.east)
-        );
-       window.colorbarOverlay = new google.maps.GroundOverlay(colorbarUrl, colorbarBounds);
-       window.colorbarOverlay.setMap(map);
-              // Captura a imagem do mapa após ajustar o zoom e o overlay
-              setTimeout(() => {
-           captureAndSaveMapImage(map, raio);
-       }, 1000); // Ajuste este delay conforme necessário
-
-       console.log("Adjusted Colorbar Bounds:", colorbarBounds);
-
-          console.log("Colorbar Overlay:", window.colorbarOverlay);
-            
-            if (coords_RX) {
-                coords_RX.setZIndex(1000);
-            }
-            //console.log(data.image)
-            
-           // posicionarRX(data.signal_level_dict);
-            //console.log(data.bounds)
-           // console.log(data.signal_level_dict)
-            // Reativa o evento de clique após adicionar a mancha de cobertura
-            // ... seu código para adicionar um marcador RX ...
-
-            // Esconde o spinner
-            document.getElementById('spinner').style.display = 'none';
-
-
-        } else {
-            throw new Error("Dados de cobertura não recebidos corretamente.");
-        }
-    })
-    .catch(error => {
-        console.error('Error:', error);
-        document.getElementById('spinner').style.display = 'none';
-        alert("Erro ao solicitar a geração da mancha de cobertura.");
-    });
-
-    
-}
-
-
-
-function captureAndSaveMapImage(map, radius) {
-    // Ajustar o zoom baseado no raio
-    var zoomLevel = getZoomLevel(radius);
-    map.setZoom(zoomLevel);
-
-    // Esperar o mapa estabilizar após o zoom
-    google.maps.event.addListenerOnce(map, 'idle', function () {
-        // Usar html2canvas para capturar a imagem do mapa
-        setTimeout(() => {
-            html2canvas(document.getElementById('map'), {
-                useCORS: true,  // Permitir uso de recursos de diferentes origens
-                logging: true,  // Ativar o log para depuração
-                allowTaint: true,  // Permitir que a imagem seja 'manchada' por dados de diferentes origens
-                ignoreElements: (element) => {
-                    // Ignorar elementos de fontes externas para evitar erros de CORS
-                    return element.tagName === 'LINK' && element.rel === 'stylesheet' && element.href.startsWith('https://fonts.googleapis.com');
-                }
-            }).then(canvas => {
-                // Converter o canvas para base64
-                var imageData = canvas.toDataURL('image/png');
-
-                // Enviar a imagem para o servidor
-                fetch('/save-map-image', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ image: imageData })
-                })
-                .then(response => response.json())
-                .then(data => {
-                    console.log('Imagem salva com sucesso:', data);
-                })
-                .catch(error => {
-                    console.error('Erro ao salvar a imagem do mapa:', error);
-                });
-            }).catch(error => {
-                console.error('Erro ao capturar a imagem do mapa:', error);
-            });
-        }, 1000); // Ajuste este delay conforme necessário
-    });
-}
-
-
-
-
-// Função auxiliar para calcular o nível de zoom baseado no raio
-function getZoomLevel(radius) {
-    // Constantes determinadas empiricamente para ajustar o zoom ao raio
-    const baseZoom = 8.5; // Zoom para 100km
-    const baseRadius = 100; // Raio de referência de 100km
-
-    // Calcular o zoom baseado na mudança proporcional logarítmica do raio
-    if (radius <= 0) return 0; // Evitar logaritmo de zero ou valores negativos
-    const zoom = baseZoom - (Math.log(radius / baseRadius) / Math.log(2));
-    
-    return zoom;
-}
-
-
-function createSignalPolygons(globalSignalLevels) {
-
-  //  console.log(globalSignalLevels);
- // Verifica se globalSignalLevels está definido e contém dados
-  if (!globalSignalLevels || Object.keys(globalSignalLevels).length === 0) {
-        console.error("globalSignalLevels está indefinido ou vazio.");
-        return; // Encerra a função se não houver dados
-    }
-
-    const levelThresholds = {
-        high: 54 + 107,  // 54 dBµV/m convertido para dBm
-        medium: 35 + 107, // 35 dBµV/m convertido para dBm
-        low: 10 + 107    // 10 dBµV/m convertido para dBm
-    };
-
-    const signalPaths = {
-        high: [],
-        medium: [],
-        low: []
-    };
-
-    // Processa cada entrada no dicionário globalSignalLevels
-    Object.entries(globalSignalLevels).forEach(([key, value]) => {
-        const [lat, lon] = key.slice(1, -1).split(',');
-        const latLng = new google.maps.LatLng(parseFloat(lat), parseFloat(lon));
-
-        if (value >= levelThresholds.high) {
-            signalPaths.high.push(latLng);
-        } else if (value >= levelThresholds.medium && value < levelThresholds.high) {
-            signalPaths.medium.push(latLng);
-        } else if (value < levelThresholds.low) {
-            signalPaths.low.push(latLng);
-        }
-    });
-
-    // Define e traça as polilinhas no mapa para cada nível de sinal
-    const highLine = new google.maps.Polyline({
-        path: signalPaths.high,
-        strokeColor: '#00FF00',
-        strokeOpacity: 1.0,
-        strokeWeight: 2
-    });
-    highLine.setMap(map);
-
-    const mediumLine = new google.maps.Polyline({
-        path: signalPaths.medium,
-        strokeColor: '#FFFF00',
-        strokeOpacity: 1.0,
-        strokeWeight: 2
-    });
-    mediumLine.setMap(map);
-
-    const lowLine = new google.maps.Polyline({
-        path: signalPaths.low,
-        strokeColor: '#FF0000',
-        strokeOpacity: 1.0,
-        strokeWeight: 2
-    });
-    lowLine.setMap(map);
-}
-// Adicione esta função ao carregar o mapa ou quando necessário
-    </script>
-   
-    
-   <button class="back-button" onclick="history.back()">Voltar</button>
-
-</body>
-</html>
+{% endblock %}
+
+{% block extra_scripts %}
+    <script src="{{ url_for('static', filename='js/pages/mapa.js') }}"></script>
+    <script src="https://maps.googleapis.com/maps/api/js?key={{ current_app.config['GOOGLE_MAPS_API_KEY'] }}&libraries=geometry&callback=initCoverageMap" async defer></script>
+{% endblock %}
