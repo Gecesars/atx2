@@ -1019,18 +1019,28 @@ def gerar_img_perfil():
 
     # Δ ganho (H) a partir do E/Emax horizontal
     delta_dir_dB = 0.0
+    delta_tilt_dB = 0.0
+    horizontal_data = None
+    vertical_data = None
     if pattern is not None:
         file_content = pattern.decode('latin1', errors='ignore')
         horizontal_data, vertical_data, _meta = parse_pat(file_content)  # E/Emax linear
-        if direction is not None:
-            rotation_index = int(direction / (360 / len(horizontal_data)))
-            horizontal_data = np.roll(horizontal_data, rotation_index)
+        if horizontal_data is not None:
+            if direction is not None:
+                rotation_index = int(direction / (360 / len(horizontal_data)))
+                horizontal_data = np.roll(horizontal_data, rotation_index)
+            e_emax = horizontal_data[int(direction_rx) % 360]
+            e_emax = max(e_emax, 1e-6)
+            delta_dir_dB = 20.0 * math.log10(e_emax)
+        if vertical_data is not None:
+            vertical_data = np.asarray(vertical_data, dtype=float)
+            if tilt:
+                vertical_data = np.roll(vertical_data, int(np.round(tilt)))
+            idx_zero = len(vertical_data) // 2
+            e_vert = max(vertical_data[idx_zero], 1e-6)
+            delta_tilt_dB = 20.0 * math.log10(e_vert)
 
-        e_emax = horizontal_data[int(direction_rx) % 360]
-        e_emax = max(e_emax, 1e-6)  # evita log(0)
-        delta_dir_dB = 20.0 * math.log10(e_emax)
-
-    G_tx_dBi = G_tx_dBi_base + delta_dir_dB
+    G_tx_dBi = G_tx_dBi_base + delta_dir_dB + delta_tilt_dB
 
     if frequency < 100:
         frequency = 100
@@ -1088,8 +1098,9 @@ def gerar_img_perfil():
     distances_km = distances.to(u.km)
 
     # Plot terreno original
-    ax.fill_between(distances_km.to_value(u.km), heights_m, color='saddlebrown', alpha=0.7, label='Terreno')
-    ax.plot(distances_km, heights_m, color='darkgreen')
+    terrain_x = distances_km.to_value(u.km)
+    ax.fill_between(terrain_x, heights_m, color='#d8c9a7', alpha=0.85, label='Terreno')
+    ax.plot(terrain_x, heights_m, color='#566246', linewidth=2)
 
     # Plot linha considerando curvatura da Terra
     curvature_line = []
@@ -1105,15 +1116,15 @@ def gerar_img_perfil():
 
         curvature_line.append(height_point)
 
-    ax.plot(distances_km.to_value(u.km), curvature_line, 'r--', alpha=0.7, label='Curvatura da Terra')
+    ax.plot(terrain_x, curvature_line, color='#b71c1c', linestyle='--', linewidth=1.6, alpha=0.8, label='Curvatura da Terra')
 
     # Antenas
-    ax.vlines(0, heights_m[0], heights_m[0] + h_tg.value, color='red', linewidth=3, label='Torre TX')
-    ax.vlines(distances_km[-1].value, heights_m[-1], heights_m[-1] + h_rg.value, color='blue', linewidth=3, label='Antena RX')
+    ax.vlines(0, heights_m[0], heights_m[0] + h_tg.value, color='#0d6efd', linewidth=3, label='TX')
+    ax.vlines(terrain_x[-1], heights_m[-1], heights_m[-1] + h_rg.value, color='#6610f2', linewidth=3, label='RX')
 
     # Linha de visada reta (para comparação)
     ax.plot([0, rx_position_km], [heights_m[0] + h_tg.value, heights_m[-1] + h_rg.value], 
-            color='orange', linestyle=':', label='Linha Reta (sem curvatura)')
+            color='#ff9800', linestyle=':', linewidth=1.5, label='Linha Reta (sem curvatura)')
 
     # Fresnel 1 com curvatura
     n_points = 100
@@ -1131,28 +1142,47 @@ def gerar_img_perfil():
     fresnel_top = adjusted_base + fresnel_radius
     fresnel_bottom = adjusted_base - fresnel_radius
 
-    ax.fill_between(x, fresnel_bottom, fresnel_top, color='yellow', alpha=0.3, label='1ª Zona Fresnel')
-    ax.plot(x, fresnel_top, 'm--', linewidth=1, alpha=0.7)
-    ax.plot(x, fresnel_bottom, 'm--', linewidth=1, alpha=0.7)
+    ax.fill_between(x, fresnel_bottom, fresnel_top, color='#ffe082', alpha=0.45, label='1ª Zona Fresnel')
+    ax.plot(x, fresnel_top, color='#9c27b0', linestyle='--', linewidth=1.2, alpha=0.8)
+    ax.plot(x, fresnel_bottom, color='#9c27b0', linestyle='--', linewidth=1.2, alpha=0.8)
 
     # Informações no gráfico
+    field_rx_dbuv = sinal_recebido + 176.284 - 20 * math.log10(max(current_user.frequencia or 1.0, 1.0))
     annotation_text = (
         f'ERP: {erp:.2f} dBm\n'
         f'Direção RX: {direction_rx:.2f}°\n'
-        f'ΔG direcional(H): {delta_dir_dB:.2f} dB\n'
+        f'ΔG horizontal: {delta_dir_dB:.2f} dB\n'
+        f'ΔG vertical: {delta_tilt_dB:.2f} dB\n'
         f'Nível de Sinal: {sinal_recebido:.2f} dBm\n'
+        f'Campo RX: {field_rx_dbuv:.2f} dBµV/m\n'
         f'Total Loss (P.452): {Lb_corr:.2f} dB\n'
         f'Distância: {distances_km[-1].to_value(u.km):.2f} km\n'
         f'Raio Terra Ef.: {effective_radius/1000:.0f} km (k=4/3)'
     )
-    ax.text(0.02, 0.98, annotation_text, transform=ax.transAxes, fontsize=10,
-            va='top', ha='left', bbox=dict(boxstyle='round,pad=0.3', ec='black', fc='lightyellow'))
+    from matplotlib.offsetbox import AnchoredText
+    anchored = AnchoredText(annotation_text, loc='upper left', frameon=True, prop=dict(size=10))
+    anchored.patch.set_boxstyle('round,pad=0.4')
+    anchored.patch.set_facecolor('#fff9c4')
+    anchored.patch.set_edgecolor('#bdb76b')
+    ax.add_artist(anchored)
 
     ax.set_xlabel('Distância (km)')
     ax.set_ylabel('Elevação (m)')
-    ax.set_title('Perfil de Elevação com Curvatura da Terra')
+    ax.set_title('Perfil de Elevação com Curvatura e Fresnel')
     plt.grid(True, which="both", ls="--")
     ax.legend(loc='lower right')
+
+    if horizontal_data is not None:
+        angles = np.arange(len(horizontal_data))
+        horizontal_db = 20.0 * np.log10(np.clip(horizontal_data, 1e-6, None))
+        ax_pattern = fig.add_axes([0.12, 0.08, 0.76, 0.2])
+        ax_pattern.plot(angles, horizontal_db, color='#3949ab', linewidth=1.4, label='Horizontal (dB)')
+        ax_pattern.axvline(direction_rx % 360, color='#d81b60', linestyle='--', linewidth=1.2, label=f'Azimute RX {direction_rx:.1f}°')
+        ax_pattern.set_xlim(0, 360)
+        ax_pattern.set_xlabel('Azimute (°)')
+        ax_pattern.set_ylabel('Ganho relativo (dB)')
+        ax_pattern.grid(True, linestyle=':', alpha=0.4)
+        ax_pattern.legend(loc='upper right')
 
     img_buffer = io.BytesIO()
     plt.savefig(img_buffer, format='png', bbox_inches='tight')
