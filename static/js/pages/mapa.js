@@ -9,18 +9,143 @@ const state = {
     selectedRxIndex: null,
     linkLine: null,
     coverageOverlay: null,
+    CoverageOverlayClass: null,
     radiusCircle: null,
     coverageData: null,
+    coverageRadiusKm: null,
+    coverageStale: false,
+    coverageUnit: 'dbuv',
+    coverageImages: null,
+    coverageScales: null,
+    signalLevelDict: { dbuv: {}, dbm: {} },
+    lossComponents: null,
+    centerMetrics: null,
     overlayOpacity: OVERLAY_DEFAULT_OPACITY,
     elevationService: null,
     pendingTiltTimeout: null,
 };
+
+function ensureCoverageOverlayClass() {
+    if (state.CoverageOverlayClass) {
+        return state.CoverageOverlayClass;
+    }
+    class CoverageImageOverlay extends google.maps.OverlayView {
+        constructor(bounds, imageSrc, opacity) {
+            super();
+            this.bounds = bounds;
+            this.imageSrc = imageSrc;
+            this.opacity = opacity;
+            this.div = null;
+            this.img = null;
+        }
+
+        onAdd() {
+            this.div = document.createElement('div');
+            this.div.style.position = 'absolute';
+            this.div.style.pointerEvents = 'none';
+
+            this.img = document.createElement('img');
+            this.img.src = this.imageSrc;
+            this.img.style.position = 'absolute';
+            this.img.style.width = '100%';
+            this.img.style.height = '100%';
+            this.img.style.opacity = this.opacity;
+            this.img.style.pointerEvents = 'none';
+
+            this.div.appendChild(this.img);
+            const panes = this.getPanes();
+            panes.overlayLayer.appendChild(this.div);
+        }
+
+        draw() {
+            if (!this.div) return;
+            const projection = this.getProjection();
+            const sw = projection.fromLatLngToDivPixel(this.bounds.getSouthWest());
+            const ne = projection.fromLatLngToDivPixel(this.bounds.getNorthEast());
+
+            this.div.style.left = `${sw.x}px`;
+            this.div.style.top = `${ne.y}px`;
+            this.div.style.width = `${ne.x - sw.x}px`;
+            this.div.style.height = `${sw.y - ne.y}px`;
+        }
+
+        onRemove() {
+            if (this.div && this.div.parentNode) {
+                this.div.parentNode.removeChild(this.div);
+            }
+            this.div = null;
+            this.img = null;
+        }
+
+        setOpacity(opacity) {
+            this.opacity = opacity;
+            if (this.img) {
+                this.img.style.opacity = opacity;
+            }
+        }
+    }
+
+    state.CoverageOverlayClass = CoverageImageOverlay;
+    return CoverageImageOverlay;
+}
 
 function formatNumber(value, suffix = '') {
     if (value === undefined || value === null || Number.isNaN(value)) {
         return '-';
     }
     return `${Number(value).toFixed(2)}${suffix}`;
+}
+
+function formatDbValue(value, unit = 'dB') {
+    if (value === undefined || value === null || Number.isNaN(value)) {
+        return '-';
+    }
+    return `${Number(value).toFixed(1)} ${unit}`;
+}
+
+let locationUpdateAbort = null;
+
+function syncTxLocation(latLng) {
+    if (!latLng) return;
+    const payload = {
+        latitude: latLng.lat(),
+        longitude: latLng.lng(),
+    };
+
+    if (locationUpdateAbort) {
+        locationUpdateAbort.abort();
+    }
+    locationUpdateAbort = new AbortController();
+
+    fetch('/tx-location', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: locationUpdateAbort.signal,
+    }).then((response) => {
+        if (!response.ok) {
+            throw new Error('Falha ao atualizar localização da TX');
+        }
+        return response.json();
+    }).then((data) => {
+        if (!state.txData) {
+            state.txData = {};
+        }
+        if (data.municipality !== undefined) {
+            state.txData.txLocationName = data.municipality;
+        }
+        if (data.elevation !== undefined) {
+            state.txData.txElevation = data.elevation;
+        }
+        updateTxSummary(state.txData);
+    }).catch((error) => {
+        if (error.name === 'AbortError') {
+            return;
+        }
+        console.error(error);
+    }).finally(() => {
+        locationUpdateAbort = null;
+    });
 }
 
 function formatDb(value) {
@@ -47,14 +172,34 @@ function updateTxSummary(data) {
     document.getElementById('txModel').textContent = data.propagationModel || '-';
     updateTiltLabel(data.antennaTilt || 0);
     document.getElementById('tiltControl').value = data.antennaTilt ?? 0;
+
+    const municipalityEl = document.getElementById('txMunicipio');
+    if (municipalityEl) {
+        municipalityEl.textContent = data.txLocationName || '-';
+    }
+    const elevationEl = document.getElementById('txElevation');
+    if (elevationEl) {
+        const elevation = data.txElevation !== undefined && data.txElevation !== null
+            ? `${Number(data.txElevation).toFixed(1)} m`
+            : '-';
+        elevationEl.textContent = elevation;
+    }
+    const climateEl = document.getElementById('txClimateInfo');
+    if (climateEl) {
+        if (data.climateUpdatedAt) {
+            const date = new Date(data.climateUpdatedAt);
+            climateEl.textContent = `Clima ajustado em ${date.toLocaleString('pt-BR', { timeZone: 'UTC' })} UTC`;
+        } else {
+            climateEl.textContent = 'Clima não ajustado para esta localização';
+        }
+    }
 }
 
-function updateGainSummary(gainComponents, scale) {
+function updateGainSummary(gainComponents) {
     if (!gainComponents) {
         document.getElementById('gainBase').textContent = '-';
         document.getElementById('gainHorizontal').textContent = '-';
         document.getElementById('gainVertical').textContent = '-';
-        document.getElementById('fieldScale').textContent = '-';
         return;
     }
     document.getElementById('gainBase').textContent = formatDb(gainComponents.base_gain_dbi || 0);
@@ -62,10 +207,30 @@ function updateGainSummary(gainComponents, scale) {
         const min = formatDb(gainComponents.horizontal_adjustment_db_min);
         const max = formatDb(gainComponents.horizontal_adjustment_db_max);
         document.getElementById('gainHorizontal').textContent = `${min} / ${max}`;
+    } else {
+        document.getElementById('gainHorizontal').textContent = '-';
     }
-    document.getElementById('gainVertical').textContent = formatDb(gainComponents.vertical_adjustment_db);
-    if (scale) {
-        document.getElementById('fieldScale').textContent = `${formatNumber(scale.min)} – ${formatNumber(scale.max)} dBµV/m`;
+    if (gainComponents.vertical_adjustment_db_min !== undefined) {
+        const minV = formatDb(gainComponents.vertical_adjustment_db_min);
+        const maxV = formatDb(gainComponents.vertical_adjustment_db_max);
+        document.getElementById('gainVertical').textContent = `${minV} / ${maxV}`;
+    } else {
+        document.getElementById('gainVertical').textContent = '-';
+    }
+}
+
+function updateScaleReadout(unitKey = state.coverageUnit || 'dbuv') {
+    if (!state.coverageData || !state.coverageData.scale) {
+        document.getElementById('fieldScale').textContent = '-';
+        return;
+    }
+    const scaleInfo = state.coverageData.scale.units || {};
+    const entry = scaleInfo[unitKey] || { min: state.coverageData.scale.min, max: state.coverageData.scale.max };
+    const label = unitKey === 'dbm' ? 'dBm' : 'dBµV/m';
+    if (entry && entry.min !== undefined && entry.max !== undefined) {
+        document.getElementById('fieldScale').textContent = `${formatNumber(entry.min)} – ${formatNumber(entry.max)} ${label}`;
+    } else {
+        document.getElementById('fieldScale').textContent = '-';
     }
 }
 
@@ -77,6 +242,222 @@ function showToast(message, isError = false) {
     setTimeout(() => {
         card.hidden = true;
     }, 3600);
+}
+
+function setCoverageStatus(message) {
+    const badge = document.getElementById('coverageStatus');
+    if (!badge) return;
+    if (message) {
+        badge.hidden = false;
+        badge.innerHTML = message;
+    } else {
+        badge.hidden = true;
+        badge.textContent = '';
+    }
+}
+
+function setCoverageLoading(isLoading) {
+    const spinner = document.getElementById('coverageSpinner');
+    const button = document.getElementById('btnGenerateCoverage');
+    if (spinner) {
+        spinner.hidden = !isLoading;
+    }
+    if (button) {
+        button.disabled = isLoading;
+    }
+}
+
+function markCoverageStale(message = 'Cobertura desatualizada. Gere novamente.') {
+    state.coverageStale = true;
+    setCoverageStatus(message);
+    state.signalLevelDict = { dbuv: {}, dbm: {} };
+    state.rxEntries.forEach((entry, idx) => {
+        if (!entry.summary) return;
+        const inside = entry.summary.insideCoverage !== false;
+        entry.summary.field_dbuv = undefined;
+        entry.summary.field_dbm = undefined;
+        entry.summary.pendingField = inside;
+        if (idx === state.selectedRxIndex) {
+            updateLinkSummary(entry.summary);
+        }
+    });
+    renderRxList();
+}
+
+function clearCoverageStatus() {
+    state.coverageStale = false;
+    setCoverageStatus('');
+}
+
+function updateUnitButtons(unitKey) {
+    const buttons = {
+        dbuv: document.getElementById('unitDbuv'),
+        dbm: document.getElementById('unitDbm'),
+    };
+    Object.entries(buttons).forEach(([key, button]) => {
+        if (!button) return;
+        if (key === unitKey) {
+            button.classList.add('active');
+            button.setAttribute('aria-pressed', 'true');
+        } else {
+            button.classList.remove('active');
+            button.setAttribute('aria-pressed', 'false');
+        }
+    });
+}
+
+function updateUnitAvailability() {
+    const btnDbuv = document.getElementById('unitDbuv');
+    const btnDbm = document.getElementById('unitDbm');
+    const images = state.coverageData?.images || {};
+    const hasDbuv = Boolean(images.dbuv?.image || state.coverageData?.image);
+    const hasDbm = Boolean(images.dbm?.image);
+    if (btnDbuv) {
+        btnDbuv.disabled = !hasDbuv;
+        btnDbuv.classList.toggle('disabled', !hasDbuv);
+    }
+    if (btnDbm) {
+        btnDbm.disabled = !hasDbm;
+        btnDbm.classList.toggle('disabled', !hasDbm);
+        if (!hasDbm) {
+            btnDbm.classList.remove('active');
+            btnDbm.setAttribute('aria-pressed', 'false');
+        }
+    }
+}
+
+function setCoverageUnit(unitKey) {
+    if (!state.coverageData) return;
+    updateUnitAvailability();
+    applyCoverageOverlay(unitKey);
+    updateScaleReadout(unitKey);
+    updateUnitButtons(unitKey);
+    if (state.selectedRxIndex !== null) {
+        const entry = state.rxEntries[state.selectedRxIndex];
+        if (entry && entry.summary) {
+            updateLinkSummary(entry.summary);
+        }
+    }
+    renderRxList();
+}
+
+let txLocationAbortController = null;
+
+function syncTxLocation(latLng) {
+    if (!latLng) return;
+    const payload = {
+        latitude: latLng.lat(),
+        longitude: latLng.lng(),
+    };
+
+    if (txLocationAbortController) {
+        txLocationAbortController.abort();
+    }
+    txLocationAbortController = new AbortController();
+
+    fetch('/tx-location', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: txLocationAbortController.signal,
+    }).then((response) => {
+        if (!response.ok) {
+            throw new Error('Falha ao sincronizar localização da TX');
+        }
+        return response.json();
+    }).then((data) => {
+        if (!state.txData) {
+            state.txData = {};
+        }
+        if (data.municipality !== undefined) {
+            state.txData.txLocationName = data.municipality;
+        }
+        if (data.elevation !== undefined) {
+            state.txData.txElevation = data.elevation;
+        }
+        updateTxSummary(state.txData);
+    }).catch((error) => {
+        if (error.name === 'AbortError') {
+            return;
+        }
+        console.error(error);
+    }).finally(() => {
+        txLocationAbortController = null;
+    });
+}
+
+function updateLossSummary(components, centerMetrics) {
+    const summaries = components || {};
+    const container = document.getElementById('lossSummary');
+    if (!container) return;
+
+    const keys = ['L_b0p', 'L_bd', 'L_bs', 'L_ba', 'L_b', 'L_b_corr'];
+    keys.forEach((key) => {
+        const el = document.getElementById(`loss-${key}`);
+        if (!el) return;
+        const item = summaries[key];
+        if (!item) {
+            el.textContent = '-';
+            return;
+        }
+        const center = formatDbValue(item.center);
+        if (item.min !== undefined && item.max !== undefined) {
+            el.textContent = `${center} (${formatDbValue(item.min)} – ${formatDbValue(item.max)})`;
+        } else {
+            el.textContent = center;
+        }
+    });
+
+    const pathInfo = document.getElementById('pathTypeInfo');
+    if (pathInfo) {
+        if (centerMetrics && centerMetrics.path_type) {
+            const pathType = (centerMetrics.path_type || '').toString().toUpperCase();
+            const lookup = {
+                LOS: 'Trajeto predominante em linha de visada (LOS).',
+                NLOS: 'Trajeto trans-horizonte com múltiplos mecanismos.',
+                DIFFRACTION: 'Perdas dominadas por difração sobre o relevo.',
+                TROPOSCATTER: 'Predomínio de espalhamento troposférico.',
+            };
+            pathInfo.textContent = lookup[pathType] || centerMetrics.path_type;
+        } else {
+            pathInfo.textContent = '';
+        }
+    }
+}
+
+function updateCenterMetrics(metrics) {
+    const data = metrics || {};
+    const setText = (id, value) => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.textContent = value;
+        }
+    };
+
+    setText('centerLoss', formatDbValue(data.combined_loss_center_db));
+    setText('centerPower', formatDbValue(data.received_power_center_dbm, 'dBm'));
+    setText('centerField', formatDbValue(data.field_center_dbuv_m, 'dBµV/m'));
+    setText('centerGain', formatDbValue(data.effective_gain_center_db));
+    if (data.distance_center_km !== undefined && data.distance_center_km !== null) {
+        setText('centerDistance', formatNumber(data.distance_center_km, ' km'));
+    } else {
+        setText('centerDistance', '-');
+    }
+    const pathEl = document.getElementById('centerPath');
+    if (pathEl) {
+        if (!data.path_type) {
+            pathEl.textContent = '-';
+        } else {
+            const pathType = (data.path_type || '').toString().toUpperCase();
+            const labelMap = {
+                LOS: 'Linha de visada (LOS)',
+                NLOS: 'Trans-horizonte (NLOS)',
+                DIFFRACTION: 'Difração predominante',
+                TROPOSCATTER: 'Espalhamento troposférico',
+            };
+            pathEl.textContent = labelMap[pathType] || data.path_type;
+        }
+    }
 }
 
 function ensureElevationService() {
@@ -97,29 +478,53 @@ function clearCoverageOverlay() {
     }
 }
 
-function applyCoverageOverlay(response) {
+function applyCoverageOverlay(unitKey = state.coverageUnit || 'dbuv') {
+    if (!state.coverageData || !state.map) return;
+    const response = state.coverageData;
+    const images = response.images || {
+        dbuv: {
+            image: response.image || null,
+            colorbar: response.colorbar || null,
+            label: 'Campo elétrico [dBµV/m]',
+            unit: 'dBµV/m',
+        },
+    };
+
+    const entry = images[unitKey] || images.dbuv;
+    if (!entry || !entry.image) return;
+
     clearCoverageOverlay();
     const bounds = response.bounds;
-    if (!bounds || !state.map) return;
+    if (!bounds) return;
 
     const overlayBounds = new google.maps.LatLngBounds(
         new google.maps.LatLng(bounds.south, bounds.west),
         new google.maps.LatLng(bounds.north, bounds.east)
     );
 
-    const overlay = new google.maps.GroundOverlay(
-        `data:image/png;base64,${response.image}`,
+    const OverlayClass = ensureCoverageOverlayClass();
+    const overlay = new OverlayClass(
         overlayBounds,
-        { opacity: state.overlayOpacity }
+        `data:image/png;base64,${entry.image}`,
+        state.overlayOpacity
     );
     overlay.setMap(state.map);
     state.coverageOverlay = overlay;
+    state.coverageUnit = unitKey;
 
-    if (response.colorbar) {
-        const card = document.getElementById('colorbarCard');
-        const img = document.getElementById('colorbarImage');
-        img.src = `data:image/png;base64,${response.colorbar}`;
-        card.hidden = false;
+    const card = document.getElementById('colorbarCard');
+    const img = document.getElementById('colorbarImage');
+    const labelEl = document.getElementById('colorbarLabel');
+    if (card && img) {
+        if (entry.colorbar) {
+            img.src = `data:image/png;base64,${entry.colorbar}`;
+            card.hidden = false;
+        } else {
+            card.hidden = true;
+        }
+    }
+    if (labelEl && entry.label) {
+        labelEl.textContent = entry.label;
     }
 
     if (response.requested_radius_km && response.center) {
@@ -133,7 +538,11 @@ function applyCoverageOverlay(response) {
             strokeWeight: 2,
             fillColor: '#0d6efd',
             fillOpacity: 0.1,
+            clickable: false,
         });
+        state.coverageRadiusKm = Number(response.requested_radius_km) || null;
+    } else {
+        state.coverageRadiusKm = null;
     }
 }
 
@@ -164,8 +573,13 @@ function findNearestFieldStrength(lat, lng, dict) {
 function updateLinkSummary(summary) {
     document.getElementById('linkDistance').textContent = summary.distance || '-';
     document.getElementById('linkBearing').textContent = summary.bearing || '-';
-    document.getElementById('linkField').textContent = summary.field || '-';
-    document.getElementById('linkElevation').textContent = summary.elevation || '-';
+    document.getElementById('linkField').textContent = formatFieldValue(summary);
+
+    let elevationText = summary.elevation || '-';
+    if (summary.obstacles && summary.obstacles !== '-' && summary.obstacles !== 'Nenhum') {
+        elevationText = `${elevationText} | Obst.: ${summary.obstacles}`;
+    }
+    document.getElementById('linkElevation').textContent = elevationText;
 }
 
 function highlightRxEntry(index) {
@@ -245,7 +659,8 @@ function renderRxList() {
         const summary = entry.summary || {};
         details.innerHTML = `
             <span>${summary.distance || '-'}</span>
-            <span>${summary.field || '-'}</span>
+            <span>${formatFieldValue(summary)}</span>
+            <span>${summary.obstacles || '-'}</span>
             <span>${summary.elevation || '-'}</span>
         `;
 
@@ -255,7 +670,8 @@ function renderRxList() {
         focusBtn.type = 'button';
         focusBtn.textContent = 'Focar';
         focusBtn.className = 'btn btn-sm btn-outline-primary';
-        focusBtn.onclick = () => {
+        focusBtn.onclick = (event) => {
+            event.stopPropagation();
             state.map.panTo(entry.marker.getPosition());
             state.map.setZoom(Math.max(state.map.getZoom(), 11));
             selectRx(idx);
@@ -265,16 +681,30 @@ function renderRxList() {
         removeBtn.type = 'button';
         removeBtn.textContent = 'Remover';
         removeBtn.className = 'btn btn-sm btn-link text-danger';
-        removeBtn.onclick = () => removeRx(idx);
+        removeBtn.onclick = (event) => {
+            event.stopPropagation();
+            removeRx(idx);
+        };
+
+        const profileBtn = document.createElement('button');
+        profileBtn.type = 'button';
+        profileBtn.textContent = 'Perfil';
+        profileBtn.className = 'btn btn-sm btn-outline-success';
+        profileBtn.onclick = (event) => {
+            event.stopPropagation();
+            selectRx(idx);
+            generateProfile();
+        };
 
         actions.appendChild(focusBtn);
+        actions.appendChild(profileBtn);
         actions.appendChild(removeBtn);
 
         li.appendChild(title);
         li.appendChild(details);
         li.appendChild(actions);
         li.onclick = (event) => {
-            if (event.target === removeBtn || event.target === focusBtn) return;
+            if (event.target === removeBtn || event.target === focusBtn || event.target === profileBtn) return;
             selectRx(idx);
         };
         container.appendChild(li);
@@ -302,12 +732,27 @@ function computeReceiverSummary(position) {
         bearing: `${bearing.toFixed(1)}°`,
     };
 
-    if (state.coverageData && state.coverageData.signal_level_dict) {
-        const field = findNearestFieldStrength(position.lat(), position.lng(), state.coverageData.signal_level_dict);
-        if (field !== null) {
-            summary.field = `${field.toFixed(1)} dBµV/m`;
+    const radiusLimitMeters = state.coverageRadiusKm ? state.coverageRadiusKm * 1000 : null;
+    const insideCoverage = radiusLimitMeters === null || distanceMeters <= radiusLimitMeters + 20;
+    summary.insideCoverage = insideCoverage;
+    summary.field_dbuv = undefined;
+    summary.field_dbm = undefined;
+    summary.obstacles = summary.obstacles || '-';
+
+    const dictDbuv = state.signalLevelDict?.dbuv || {};
+    const dictDbm = state.signalLevelDict?.dbm || {};
+
+    if (insideCoverage) {
+        const fieldDbuv = findNearestFieldStrength(position.lat(), position.lng(), dictDbuv);
+        if (fieldDbuv !== null && fieldDbuv !== undefined) {
+            summary.field_dbuv = Number(fieldDbuv);
+        }
+        const fieldDbm = findNearestFieldStrength(position.lat(), position.lng(), dictDbm);
+        if (fieldDbm !== null && fieldDbm !== undefined) {
+            summary.field_dbm = Number(fieldDbm);
         }
     }
+    summary.pendingField = insideCoverage && summary.field_dbuv === undefined && summary.field_dbm === undefined;
 
     return getElevation(position).then((elevation) => {
         if (elevation !== null) {
@@ -315,6 +760,24 @@ function computeReceiverSummary(position) {
         }
         return summary;
     });
+}
+
+function formatFieldValue(summary) {
+    if (!summary) return '-';
+    const unitKey = state.coverageUnit || 'dbuv';
+    if (unitKey === 'dbm') {
+        if (summary.field_dbm !== undefined) {
+            return `${summary.field_dbm.toFixed(1)} dBm`;
+        }
+    } else {
+        if (summary.field_dbuv !== undefined) {
+            return `${summary.field_dbuv.toFixed(1)} dBµV/m`;
+        }
+    }
+    if (summary.insideCoverage === false) {
+        return 'Fora da área';
+    }
+    return summary.pendingField ? 'Em cálculo' : '-';
 }
 
 function createRxMarker(position) {
@@ -358,6 +821,7 @@ function createRxMarker(position) {
     state.rxEntries.push(entry);
     computeReceiverSummary(position).then((summary) => {
         entry.summary = summary;
+        entry.pendingField = summary.pendingField;
         if (state.selectedRxIndex === state.rxEntries.indexOf(entry)) {
             updateLinkSummary(summary);
         }
@@ -373,6 +837,9 @@ function handleMapClick(event) {
 }
 
 function setTxCoords(latLng, { pan = false } = {}) {
+    const prevCoords = state.txCoords
+        ? new google.maps.LatLng(state.txCoords.lat(), state.txCoords.lng())
+        : null;
     state.txCoords = latLng;
     if (state.txMarker) {
         state.txMarker.setPosition(latLng);
@@ -384,6 +851,12 @@ function setTxCoords(latLng, { pan = false } = {}) {
         state.txData.latitude = latLng.lat();
         state.txData.longitude = latLng.lng();
         updateTxSummary(state.txData);
+    }
+    const distanceChanged = prevCoords
+        ? google.maps.geometry.spherical.computeDistanceBetween(prevCoords, latLng)
+        : Number.POSITIVE_INFINITY;
+    if (!prevCoords || distanceChanged > 0.5) {
+        syncTxLocation(latLng);
     }
     state.rxEntries.forEach((entry, idx) => {
         if (entry.summary) {
@@ -402,6 +875,7 @@ function handleTxDragEnd(event) {
     const position = event.latLng;
     setTxCoords(position, { pan: false });
     showToast('Posição da TX atualizada. Gere a cobertura novamente.', false);
+    markCoverageStale('Posição da TX alterada. Gere a cobertura novamente.');
 }
 
 function saveTilt(value) {
@@ -422,7 +896,8 @@ function saveTilt(value) {
             if (state.txData) {
                 state.txData.antennaTilt = Number(value);
             }
-            showToast('Tilt atualizado');
+            showToast('Tilt atualizado. Gere a cobertura novamente.');
+            markCoverageStale('Tilt alterado. Gere a cobertura novamente.');
         }).catch((error) => {
             console.error(error);
             showToast('Erro ao atualizar tilt', true);
@@ -443,6 +918,8 @@ function generateCoverage() {
         customCenter: { lat: state.txCoords.lat(), lng: state.txCoords.lng() },
     };
 
+    setCoverageLoading(true);
+
     fetch('/calculate-coverage', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -454,16 +931,64 @@ function generateCoverage() {
         return response.json();
     }).then((data) => {
         state.coverageData = data;
+        state.coverageRadiusKm = Number(data.requested_radius_km) || null;
+        state.signalLevelDict = {
+            dbuv: data.signal_level_dict || {},
+            dbm: data.signal_level_dict_dbm || {},
+        };
+        state.lossComponents = data.loss_components || null;
+        state.centerMetrics = data.center_metrics || null;
+
+        if (!state.txData) {
+            state.txData = {};
+        }
+        if (data.tx_location_name !== undefined) {
+            state.txData.txLocationName = data.tx_location_name;
+        }
+        if (data.tx_site_elevation !== undefined) {
+            state.txData.txElevation = data.tx_site_elevation;
+        }
+        if (data.climate_updated_at) {
+            state.txData.climateUpdatedAt = data.climate_updated_at;
+        }
+
         if (data.center) {
             const centerLatLng = new google.maps.LatLng(data.center.lat, data.center.lng);
             setTxCoords(centerLatLng, { pan: false });
+        } else {
+            updateTxSummary(state.txData);
         }
-        applyCoverageOverlay(data);
-        updateGainSummary(data.gain_components, data.scale);
+
+        const defaultUnit = (data.scale && data.scale.default_unit) || 'dbuv';
+        state.coverageUnit = defaultUnit;
+        setCoverageUnit(defaultUnit);
+        updateGainSummary(data.gain_components || null);
+        updateLossSummary(state.lossComponents, state.centerMetrics);
+        updateCenterMetrics(state.centerMetrics);
+
+        if (data.location_status) {
+            setCoverageStatus(data.location_status);
+        } else {
+            clearCoverageStatus();
+        }
+
+        const recomputePromises = state.rxEntries.map((entry, idx) =>
+            computeReceiverSummary(entry.marker.getPosition()).then((summary) => {
+                entry.summary = summary;
+                if (idx === state.selectedRxIndex) {
+                    updateLinkSummary(summary);
+                }
+            })
+        );
+        Promise.all(recomputePromises).finally(() => {
+            renderRxList();
+        });
         showToast('Cobertura atualizada com sucesso');
     }).catch((error) => {
         console.error(error);
         showToast('Não foi possível gerar a cobertura', true);
+    }).finally(() => {
+        setCoverageLoading(false);
     });
 }
 
@@ -496,6 +1021,28 @@ function generateProfile() {
     }).then((data) => {
         const img = document.getElementById('profileImage');
         img.src = `data:image/png;base64,${data.image}`;
+
+        if (!entry.summary) {
+            entry.summary = {};
+        }
+        if (data.field_dbuv !== undefined) {
+            entry.summary.field_dbuv = Number(data.field_dbuv);
+            entry.summary.pendingField = false;
+        }
+        if (Array.isArray(data.obstacle_distances_km)) {
+            entry.summary.obstacles = data.obstacle_distances_km.length
+                ? data.obstacle_distances_km.slice(0, 6).map((dist) => `${Number(dist).toFixed(2)} km`).join(', ')
+                : 'Nenhum';
+        }
+        if (data.received_power_dbm !== undefined) {
+            entry.summary.field_dbm = Number(data.received_power_dbm);
+        }
+        if (data.tx_gain_dbi !== undefined) {
+            entry.summary.txGain = `${Number(data.tx_gain_dbi).toFixed(2)} dBi`;
+        }
+        renderRxList();
+        updateLinkSummary(entry.summary);
+
         const modal = bootstrap.Modal.getOrCreateInstance(document.getElementById('profileModal'));
         modal.show();
     }).catch((error) => {
@@ -527,6 +1074,15 @@ function initControls() {
     tiltControl.addEventListener('change', (event) => {
         saveTilt(event.target.value);
     });
+
+    const unitDbuv = document.getElementById('unitDbuv');
+    if (unitDbuv) {
+        unitDbuv.addEventListener('click', () => setCoverageUnit('dbuv'));
+    }
+    const unitDbm = document.getElementById('unitDbm');
+    if (unitDbm) {
+        unitDbm.addEventListener('click', () => setCoverageUnit('dbm'));
+    }
 
     updateRadiusLabel();
 }
@@ -561,6 +1117,7 @@ function initCoverageMap() {
             state.map.addListener('click', handleMapClick);
 
             initControls();
+            updateUnitButtons(state.coverageUnit || 'dbuv');
             ensureElevationService();
         })
         .catch((error) => {

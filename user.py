@@ -36,6 +36,18 @@ class User(UserMixin, db.Model):
     cobertura_img= db.Column(db.LargeBinary, nullable=True)
     perfil_img = db.Column(db.LargeBinary, nullable=True)
 
+    time_percentage = db.Column(db.Float, nullable=True)
+    polarization = db.Column(db.String(), nullable=True)
+    temperature_k = db.Column(db.Float, nullable=True)
+    pressure_hpa = db.Column(db.Float, nullable=True)
+    water_density = db.Column(db.Float, nullable=True)
+    p452_version = db.Column(db.Integer, nullable=True)
+    tx_location_name = db.Column(db.String(), nullable=True)
+    tx_site_elevation = db.Column(db.Float, nullable=True)
+    climate_lat = db.Column(db.Float, nullable=True)
+    climate_lon = db.Column(db.Float, nullable=True)
+    climate_updated_at = db.Column(db.DateTime, nullable=True)
+
     def set_password(self, password):
         """Cria uma hash de senha para armazenar no banco de dados usando argon2."""
         self.password_hash = argon2.hash(password)

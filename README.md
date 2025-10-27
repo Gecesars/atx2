@@ -17,6 +17,30 @@
 - **Signal Processing Utilities**: Functions for analyzing and processing RF signals.
 - **Data Visualization**: Interactive charts and graphs for visualizing simulation results.
 - **SNMP Management**: Integration with SNMP for monitoring and managing networked RF devices.
+- **Coverage Planner**: Dual-overlay (dBµV/m & dBm) map with ITU-R P.452 loss breakdown, tilt-aware antenna gains and receiver management.
+- **Automatic Context Data**: TX municipality/elevation discovery (SRTM + reverse geocoding) and climate snapshots agregated from the last 360 days via Open-Meteo.
+- **Professional UX**: Sticky navigation, polished control panel, live spinners and climate/location warnings to highlight pending updates.
+
+---
+
+## 📍 Planejamento de Cobertura
+
+- Painel lateral profissional com cartões para TX, tilt, RXs, ganhos, perdas P.452, indicadores centrais e ligação TX↔RX sincronizados com o mapa Google.
+- Camadas de cobertura comutáveis entre campo elétrico (dBµV/m) e potência recebida (dBm), respeitando a escala padrão 10–60 dBµV/m e autoajustando o histograma por percentis.
+- Máscara circular respeitando o raio solicitado, com feathering para transição suave e supressão de artefatos fora da mancha.
+- Lista de RX com resumo imediato (distância, rumo, nível estimado, obstáculos e terreno) e ação direta para gerar perfis profissionais com Fresnel, torres escalonadas e orçamento de enlace.
+- Indicadores do ponto central realçam a perda combinada, ganho efetivo, campo e classificação da trajetória (LOS/NLOS/difração/troposcatter).
+
+## 🌦️ Dados Climáticos Automatizados
+
+- Integração com a API [Open-Meteo](https://open-meteo.com/) usando médias horárias dos últimos 360 dias para extrair temperatura, pressão, umidade relativa e densidade absoluta de vapor d'água.
+- Persistência de latitude/longitude, município e altitude do site TX para detectar mudanças de localização e solicitar novo ajuste climático quando necessário.
+- Os valores persistidos alimentam automaticamente o cálculo com pycraf (tempo %, polarização, versão P.452, temperatura, pressão, densidade de vapor), mantendo coerência entre formulários e backend.
+
+## 📚 Documentação Complementar
+
+- **Arquitetura detalhada**: consulte `docs/ARCHITECTURE.md` para fluxos de backend/front-end e integrações.
+- **Referência pycraf**: o arquivo `pycraf.md` descreve os modelos UIT-R implementados e destaca os parâmetros utilizados nas novas métricas de cobertura.
 
 ---
 
@@ -68,6 +92,18 @@ ATXCOVER/
    ```
 
    The application will be accessible at `http://localhost:5000`.
+
+4. **Apply database migrations (when schema changes are shipped):**
+
+   ```bash
+   flask db upgrade
+   ```
+
+5. **Restart the managed service (production environments):**
+
+   ```bash
+   sudo systemctl restart atxcover
+   ```
 
 ---
 

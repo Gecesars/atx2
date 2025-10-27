@@ -42,6 +42,10 @@
                 <label for="coordinates" class="form-label">Coordenadas selecionadas</label>
                 <input type="text" class="form-control" id="coordinates" placeholder="Latitude e Longitude" readonly>
             </div>
+            <div class="location-summary">
+                <span>Município: <strong id="txLocationName">-</strong></span>
+                <span>Altitude TX: <strong id="txElevation">-</strong></span>
+            </div>
             <div class="form-grid">
                 <div>
                     <label for="towerHeight" class="form-label">Altura do centro de fase (m)</label>
@@ -89,6 +93,27 @@
                     <input type="number" id="Total_loss" name="Total_loss" class="form-control" min="0" step="any" required>
                 </div>
             </div>
+            <div class="form-grid">
+                <div>
+                    <label for="timePercentage" class="form-label">Percentual de tempo p (%), ITU-R P.452</label>
+                    <input type="number" id="timePercentage" name="timePercentage" class="form-control" min="0.001" max="50" step="0.1" placeholder="40">
+                    <small class="form-text text-muted">Valor entre 0.001 e 50%. Usado para cenários críticos de disponibilidade.</small>
+                </div>
+                <div>
+                    <label for="polarization" class="form-label">Polarização da emissão</label>
+                    <select id="polarization" name="polarization" class="form-select">
+                        <option value="vertical">Vertical</option>
+                        <option value="horizontal">Horizontal</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="p452Version" class="form-label">Recomendação ITU-R P.452</label>
+                    <select id="p452Version" name="p452Version" class="form-select">
+                        <option value="16">Versão 16 (atual)</option>
+                        <option value="14">Versão 14 (legado)</option>
+                    </select>
+                </div>
+            </div>
         </article>
 
         <article class="coverage-card">
@@ -115,6 +140,27 @@
                     <input type="number" id="antennaTilt" name="antennaTilt" class="form-control" step="0.5" placeholder="0">
                 </div>
             </div>
+        </article>
+
+        <article class="coverage-card">
+            <h3>Condições Atmosféricas</h3>
+            <div class="form-grid">
+                <div>
+                    <label for="temperature" class="form-label">Temperatura média (°C)</label>
+                    <input type="number" id="temperature" name="temperature" class="form-control" step="0.1" placeholder="20">
+                </div>
+                <div>
+                    <label for="pressure" class="form-label">Pressão atmosférica (hPa)</label>
+                    <input type="number" id="pressure" name="pressure" class="form-control" step="0.1" placeholder="1013">
+                </div>
+                <div>
+                    <label for="waterDensity" class="form-label">Densidade de vapor d'água (g/m³)</label>
+                    <input type="number" id="waterDensity" name="waterDensity" class="form-control" step="0.1" placeholder="7.5">
+                </div>
+            </div>
+            <p class="assist-text">Valores típicos: 20&nbsp;°C, 1013&nbsp;hPa e 7.5&nbsp;g/m³ (condições padrão ITU). Ajuste para refletir o clima local.</p>
+            <button type="button" class="btn btn-outline-secondary" id="loadClimateBtn">Usar dados climáticos estimados (últimos 6 meses)</button>
+            <small class="form-text text-muted" id="climateStatus" hidden></small>
         </article>
 
         <div class="coverage-actions">

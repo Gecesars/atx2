@@ -74,6 +74,19 @@
     max-width: 90px;
 }
 
+.location-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    margin-bottom: 0.75rem;
+}
+
+.location-summary strong {
+    color: var(--text-primary);
+}
+
 .coverage-actions {
     display: flex;
     flex-wrap: wrap;

@@ -33,7 +33,16 @@
                     <dt>Modelo</dt>
                     <dd id="txModel">-</dd>
                 </div>
+                <div>
+                    <dt>Município</dt>
+                    <dd id="txMunicipio">-</dd>
+                </div>
+                <div>
+                    <dt>Altitude TX</dt>
+                    <dd id="txElevation">-</dd>
+                </div>
             </dl>
+            <p class="assist-text" id="txClimateInfo">Clima não ajustado para esta localização</p>
         </div>
 
         <div class="panel-card">
@@ -55,7 +64,13 @@
                 </div>
             </div>
 
+            <div class="unit-toggle-group" role="group" aria-label="Unidade da escala">
+                <button type="button" class="btn btn-sm btn-outline-primary active" id="unitDbuv" aria-pressed="true">Campo dBµV/m</button>
+                <button type="button" class="btn btn-sm btn-outline-primary" id="unitDbm" aria-pressed="false">Potência dBm</button>
+            </div>
+
             <button class="btn btn-brand w-100" id="btnGenerateCoverage">Gerar cobertura</button>
+            <div class="coverage-status-badge" id="coverageStatus" hidden></div>
         </div>
 
         <div class="panel-card">
@@ -99,12 +114,73 @@
                     <dd id="gainHorizontal">-</dd>
                 </div>
                 <div>
-                    <dt>Vertical (θ=0)</dt>
+                    <dt>Vertical (min/max)</dt>
                     <dd id="gainVertical">-</dd>
                 </div>
                 <div>
                     <dt>Escala</dt>
                     <dd id="fieldScale">-</dd>
+                </div>
+            </dl>
+        </div>
+
+        <div class="panel-card">
+            <h3 class="card-title">Perdas P.452</h3>
+            <dl class="card-grid loss-grid" id="lossSummary">
+                <div>
+                    <dt>L_b0p</dt>
+                    <dd id="loss-L_b0p">-</dd>
+                </div>
+                <div>
+                    <dt>L_bd</dt>
+                    <dd id="loss-L_bd">-</dd>
+                </div>
+                <div>
+                    <dt>L_bs</dt>
+                    <dd id="loss-L_bs">-</dd>
+                </div>
+                <div>
+                    <dt>L_ba</dt>
+                    <dd id="loss-L_ba">-</dd>
+                </div>
+                <div>
+                    <dt>L_b</dt>
+                    <dd id="loss-L_b">-</dd>
+                </div>
+                <div>
+                    <dt>L_b_corr</dt>
+                    <dd id="loss-L_b_corr">-</dd>
+                </div>
+            </dl>
+            <p class="assist-text" id="pathTypeInfo"></p>
+        </div>
+
+        <div class="panel-card">
+            <h3 class="card-title">Referência Central</h3>
+            <dl class="card-grid" id="centerSummary">
+                <div>
+                    <dt>Perda combinada</dt>
+                    <dd id="centerLoss">-</dd>
+                </div>
+                <div>
+                    <dt>Potência RX</dt>
+                    <dd id="centerPower">-</dd>
+                </div>
+                <div>
+                    <dt>Campo elétrico</dt>
+                    <dd id="centerField">-</dd>
+                </div>
+                <div>
+                    <dt>Ganho efetivo</dt>
+                    <dd id="centerGain">-</dd>
+                </div>
+                <div>
+                    <dt>Trajetória</dt>
+                    <dd id="centerPath">-</dd>
+                </div>
+                <div>
+                    <dt>Distância</dt>
+                    <dd id="centerDistance">-</dd>
                 </div>
             </dl>
         </div>
@@ -138,12 +214,17 @@
         </div>
 
         <div class="colorbar-card" id="colorbarCard" hidden>
+            <span class="colorbar-label" id="colorbarLabel">Campo elétrico [dBµV/m]</span>
             <img id="colorbarImage" alt="Colorbar cobertura" />
         </div>
     </aside>
 
     <div class="map-canvas">
         <div id="coverageMap" class="map-container"></div>
+        <div id="coverageSpinner" class="map-loading" hidden>
+            <div class="coverage-spinner-icon" aria-hidden="true"></div>
+            <span>Gerando cobertura...</span>
+        </div>
         <div class="map-floating-card" id="mapTooltip" hidden></div>
     </div>
 </section>

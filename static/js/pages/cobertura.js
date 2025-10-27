@@ -50,6 +50,21 @@
                     userName.textContent = data.nomeUsuario;
                 }
             }
+            const polSelect = document.getElementById('polarization');
+            if (polSelect) {
+                polSelect.value = (data.polarization || 'vertical').toLowerCase();
+            }
+            const versionSelect = document.getElementById('p452Version');
+            if (versionSelect) {
+                versionSelect.value = data.p452Version || '16';
+            }
+            if (data.timePercentage === undefined || data.timePercentage === null) {
+                const timeField = document.getElementById('timePercentage');
+                if (timeField) {
+                    timeField.value = 40;
+                }
+            }
+            atualizarResumoLocalDados(data);
         } catch (error) {
             console.error(error);
         }
@@ -89,6 +104,47 @@
         document.getElementById(decimalFieldId).value = (decimalValue * direction).toFixed(6);
     }
 
+    function atualizarResumoLocalDados(data) {
+        const municipioEl = document.getElementById('txLocationName');
+        if (municipioEl) {
+            municipioEl.textContent = data.txLocationName || data.municipality || '-';
+        }
+        const elevationEl = document.getElementById('txElevation');
+        if (elevationEl) {
+            const valor = data.txElevation ?? data.elevation;
+            elevationEl.textContent = valor !== undefined && valor !== null
+                ? `${Number(valor).toFixed(1)} m`
+                : '-';
+        }
+        const climateEl = document.getElementById('climateStatus');
+        if (climateEl) {
+            if (data.climateUpdatedAt) {
+                const date = new Date(data.climateUpdatedAt);
+                climateEl.hidden = false;
+                climateEl.innerHTML = `Clima ajustado em ${date.toLocaleString('pt-BR', { timeZone: 'UTC' })} UTC.`;
+            } else if (!climateEl.textContent) {
+                climateEl.hidden = true;
+            }
+        }
+    }
+
+    async function atualizarLocalizacaoTx(lat, lng) {
+        try {
+            const response = await fetch('/tx-location', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ latitude: lat, longitude: lng }),
+            });
+            if (!response.ok) {
+                throw new Error('Falha ao atualizar localização');
+            }
+            const data = await response.json();
+            atualizarResumoLocalDados(data);
+        } catch (error) {
+            console.error(error);
+        }
+    }
+
     function placeMarkerAndPanTo(latLng) {
         if (marker) {
             marker.setMap(null);
@@ -107,6 +163,8 @@
         if (coverageButton) {
             coverageButton.disabled = false;
         }
+
+        atualizarLocalizacaoTx(latitude, longitude);
     }
 
     function saveCoordinates() {
@@ -122,6 +180,8 @@
             coverageButton.disabled = false;
         }
         modals.map?.hide();
+
+        atualizarLocalizacaoTx(latitude, longitude);
     }
 
     function saveManualCoordinates() {
@@ -139,6 +199,7 @@
                 coverageButton.disabled = false;
             }
             modals.coordinates?.hide();
+            atualizarLocalizacaoTx(latitudeDecimal, longitudeDecimal);
         } else {
             alert('Por favor, preencha todas as coordenadas.');
         }
@@ -156,6 +217,49 @@
         modals.map?.hide();
     }
 
+    async function carregarClimaAutomatico() {
+        const statusEl = document.getElementById('climateStatus');
+        if (statusEl) {
+            statusEl.hidden = false;
+            statusEl.textContent = 'Consultando Open-Meteo...';
+        }
+        try {
+            const response = await fetch('/clima-recomendado');
+            if (!response.ok) {
+                throw new Error('Falha na API');
+            }
+            const data = await response.json();
+            if (data.error) {
+                throw new Error(data.error);
+            }
+            const { temperature, pressure, waterDensity } = data;
+            const tempField = document.getElementById('temperature');
+            const pressureField = document.getElementById('pressure');
+            const waterField = document.getElementById('waterDensity');
+            if (tempField) tempField.value = Number(temperature).toFixed(1);
+            if (pressureField) pressureField.value = Number(pressure).toFixed(1);
+            if (waterField) waterField.value = Number(waterDensity).toFixed(2);
+            if (statusEl) {
+                const { relativeHumidity, daysSampled } = data;
+                const months = (daysSampled || 360) / 30;
+                statusEl.innerHTML = `Médias horárias agregadas em ${Math.round(months)} meses (≈${daysSampled || 360} dias): ` +
+                    `T = ${Number(temperature).toFixed(1)}&nbsp;°C, ` +
+                    `UR = ${Number(relativeHumidity || 0).toFixed(1)}&nbsp;%, ` +
+                    `P = ${Number(pressure).toFixed(1)}&nbsp;hPa, ` +
+                    `ρ<sub>v</sub> = ${Number(waterDensity).toFixed(2)}&nbsp;g/m³.`;
+            }
+            atualizarResumoLocalDados({
+                txLocationName: data.municipality,
+                climateUpdatedAt: data.climateUpdatedAt,
+            });
+        } catch (error) {
+            console.error(error);
+            if (statusEl) {
+                statusEl.textContent = 'Não foi possível obter dados climáticos automáticos.';
+            }
+        }
+    }
+
     async function submitForm() {
         const form = document.getElementById('coberturaForm');
         if (!form) {
@@ -169,18 +273,29 @@
         const [latitudeValue, latitudeDirection] = (latitudePart || '').split(' ');
         const [longitudeValue, longitudeDirection] = (longitudePart || '').split(' ');
 
+        const coerceNumber = (value) => {
+            const num = parseFloat(value);
+            return Number.isFinite(num) ? num : null;
+        };
+
         const payload = {
             propagationModel: formData.get('propagationModel'),
-            Total_loss: parseFloat(formData.get('Total_loss')),
-            antennaGain: parseFloat(formData.get('antennaGain')),
-            towerHeight: parseFloat(formData.get('towerHeight')),
-            rxHeight: parseFloat(formData.get('rxHeight')),
-            rxGain: parseFloat(formData.get('rxGain')),
-            transmissionPower: parseFloat(formData.get('transmissionPower')),
-            frequency: parseFloat(formData.get('frequency')),
+            Total_loss: coerceNumber(formData.get('Total_loss')),
+            antennaGain: coerceNumber(formData.get('antennaGain')),
+            towerHeight: coerceNumber(formData.get('towerHeight')),
+            rxHeight: coerceNumber(formData.get('rxHeight')),
+            rxGain: coerceNumber(formData.get('rxGain')),
+            transmissionPower: coerceNumber(formData.get('transmissionPower')),
+            frequency: coerceNumber(formData.get('frequency')),
             service: formData.get('serviceType'),
             latitude: latitudeValue,
             longitude: longitudeValue,
+            timePercentage: coerceNumber(formData.get('timePercentage')),
+            polarization: formData.get('polarization'),
+            p452Version: formData.get('p452Version'),
+            temperature: coerceNumber(formData.get('temperature')),
+            pressure: coerceNumber(formData.get('pressure')),
+            waterDensity: coerceNumber(formData.get('waterDensity')),
         };
 
         const tiltField = formData.get('antennaTilt');
@@ -262,6 +377,11 @@
         const generateCoverageBtn = document.getElementById('generateCoverageButton');
         if (generateCoverageBtn) {
             generateCoverageBtn.addEventListener('click', submitForm);
+        }
+
+        const loadClimateBtn = document.getElementById('loadClimateBtn');
+        if (loadClimateBtn) {
+            loadClimateBtn.addEventListener('click', carregarClimaAutomatico);
         }
 
         const refreshDataBtn = document.getElementById('refreshDataBtn');
