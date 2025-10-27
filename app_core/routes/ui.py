@@ -340,6 +340,125 @@ def get_google_maps_key():
 def get_solid_png_dir():
     return current_app.config['SOLID_PNG_ROOT']
 
+def _coerce_float(value):
+    """
+    Converte value para float ou retorna None.
+    Aceita "", None, "   ", etc.
+    """
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        v = value.strip()
+        if v == "":
+            return None
+        try:
+            return float(v)
+        except ValueError:
+            return None
+    # qualquer outro tipo inesperado
+    return None
+
+
+def _coerce_str(value):
+    """
+    Aceita string, número, None.
+    Normaliza "" -> None, senão retorna string.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        v = value.strip()
+        return v if v != "" else None
+    # ex. número (frequency às vezes mandam como 105.7 mas você quer string? não, mas p/ campos textuais)
+    return str(value)
+
+
+@bp.route("/salvar-dados", methods=["POST"])
+@login_required
+def salvar_dados():
+    data = request.get_json(silent=True) or {}
+
+    # 1. Extrair cada campo do payload sem assumir que existe
+    #    Se não existir, não sobrescreve o valor atual.
+    #    Se existir mas vier vazio, salva como None.
+
+    # Campos numéricos
+    numeric_fields = {
+        "towerHeight": "tower_height",
+        "rxHeight": "rx_height",
+        "Total_loss": "total_loss",
+        "antennaGain": "antenna_gain",
+        "rxGain": "rx_gain",
+        "transmissionPower": "transmission_power",
+        "frequency": "frequency",
+        "antennaTilt": "antenna_tilt",
+        "timePercentage": "time_percentage",
+        "temperature": "temperature",
+        "pressure": "pressure",
+        "waterDensity": "water_density",
+        "latitude": "latitude",
+        "longitude": "longitude",
+    }
+
+    # Campos textuais / categóricos
+    text_fields = {
+        "propagationModel": "propagation_model",
+        "service": "service_type",
+        "polarization": "polarization",
+        "p452Version": "p452_version",
+    }
+
+    # 2. Atualiza campos numéricos
+    for incoming_key, model_attr in numeric_fields.items():
+        if incoming_key in data:
+            setattr(current_user, model_attr, _coerce_float(data.get(incoming_key)))
+
+    # 3. Atualiza campos textuais
+    for incoming_key, model_attr in text_fields.items():
+        if incoming_key in data:
+            setattr(current_user, model_attr, _coerce_str(data.get(incoming_key)))
+
+    # 4. Commit no banco
+    try:
+        db.session.add(current_user)
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        # Aqui NÃO vamos devolver 500 cego. Vamos devolver JSON dizendo erro,
+        # mas ainda assim status 200 se você quiser que o front trate como "ok mas com aviso".
+        # Se preferir status 500 mantenha 500.
+        return jsonify({
+            "status": "error",
+            "message": "Falha ao gravar no banco",
+            "detail": str(e),
+        }), 500
+
+    # 5. Retornar o snapshot atualizado para o front
+    #    Isso ajuda a UI a se alinhar com o que realmente ficou salvo.
+    return jsonify({
+        "status": "ok",
+        "towerHeight": current_user.tower_height,
+        "rxHeight": current_user.rx_height,
+        "Total_loss": current_user.total_loss,
+        "antennaGain": current_user.antenna_gain,
+        "rxGain": current_user.rx_gain,
+        "transmissionPower": current_user.transmission_power,
+        "frequency": current_user.frequency,
+        "antennaTilt": getattr(current_user, "antenna_tilt", None),
+        "timePercentage": current_user.time_percentage,
+        "temperature": current_user.temperature,
+        "pressure": current_user.pressure,
+        "waterDensity": current_user.water_density,
+        "propagationModel": current_user.propagation_model,
+        "service": current_user.service_type,
+        "polarization": current_user.polarization,
+        "p452Version": current_user.p452_version,
+        "latitude": current_user.latitude,
+        "longitude": current_user.longitude,
+    }), 200
+
 @bp.route('/')
 def inicio():
     return render_template('inicio.html')
@@ -1459,15 +1578,7 @@ def gerar_img_perfil():
     })
 
 
-    return jsonify({
-        "image": img_base64,
-        "field_dbuv": float(field_rx_dbuv),
-        "received_power_dbm": float(sinal_recebido),
-        "tx_gain_dbi": float(G_tx_dBi),
-        "horizontal_delta_db": float(delta_dir_dB),
-        "vertical_delta_db": float(delta_tilt_dB),
-        "obstacle_distances_km": obstacle_distances.tolist(),
-    })
+
 
 # -------- Cobertura (mapa) --------
 
@@ -1796,18 +1907,30 @@ def _render_field_strength_image(lons_deg, lats_deg, field_levels,
 def calculate_coverage():
     data = request.get_json()
 
-    # --- parâmetros de sistema / usuário ---
-    loss = current_user.total_loss or 0.0  # perdas fixas do sistema (cabos, conectores etc.) em dB
-    Ptx_W = max(float(current_user.transmission_power or 0.0), 1e-6)  # W, nunca deixar 0
-    ganho_pico_dBi = current_user.antenna_gain or 0.0                 # ganho máximo (TX)
-    Grx_dBi = current_user.rx_gain or 0.0                              # ganho da antena RX (fixo)
+    # -------------------------------
+    # 1. PARÂMETROS DO USUÁRIO / TX-RX
+    # -------------------------------
+    # perdas fixas de sistema (cabos, conectores), dB
+    loss = current_user.total_loss or 0.0
+
+    # potência transmitida (W); evita log(0)
+    Ptx_W = max(float(current_user.transmission_power or 0.0), 1e-6)
+
+    # ganho máximo nominal da antena TX (dBi)
+    ganho_pico_dBi = current_user.antenna_gain or 0.0
+
+    # ganho RX (dBi)
+    Grx_dBi = current_user.rx_gain or 0.0
+
+    # centro opcional vindo do front (override)
     center_override = data.get('customCenter') or {}
 
-    # coordenadas TX
+    # localização da TX (latitude/longitude em graus)
     try:
         long = float(center_override.get('lng', current_user.longitude))
         lati = float(center_override.get('lat', current_user.latitude))
     except (TypeError, ValueError):
+        # fallback: se current_user já tiver, usa. senão continua None.
         long, lati = current_user.longitude, current_user.latitude
 
     def _coerce_optional(value):
@@ -1823,7 +1946,7 @@ def calculate_coverage():
         except ValueError:
             return None
 
-    # raio solicitado (km) para plot
+    # raio solicitado em km (círculo que vamos rasterizar)
     radius_requested = _coerce_optional(data.get('radius'))
     if radius_requested is None or radius_requested <= 0:
         radius_requested = 10.0
@@ -1832,47 +1955,53 @@ def calculate_coverage():
     lon_rt = long * u.deg
     lat_rt = lati * u.deg
 
-    # frequência
+    # ----------------------------------------
+    # FREQ: manter exatamente como você definiu
+    # ----------------------------------------
     freq_input_mhz = current_user.frequencia or 100.0
-    if freq_input_mhz < 100:
-        # ainda estamos extrapolando P.452 para <700 MHz, mas mantemos coerência interna
+    if freq_input_mhz < 100.0:
+        # extrapolação segura mínima
         freq_input_mhz = 100.0
-    frequency = (freq_input_mhz / 1000.0) * u.GHz  # pycraf trabalha em GHz
+    # pycraf trabalha em GHz
+    frequency = (freq_input_mhz / 1000.0) * u.GHz
 
-    # alturas TX/RX acima do solo
+    # alturas RX/TX
     rx_height = current_user.rx_height if current_user.rx_height is not None else 1.0   # m
     tx_height = current_user.tower_height if current_user.tower_height is not None else 30.0  # m
     h_rt = rx_height * u.m
     h_wt = tx_height * u.m
 
-    # porcentagem de tempo (p%) da ITU-R P.452
+    # porcentagem de tempo P.452 (p%)
     time_pct = current_user.time_percentage if current_user.time_percentage else 40.0
-    time_pct = max(0.001, min(float(time_pct), 50.0))  # limite válido da reco
-    timepercent = time_pct * u.percent  # quantidade COM unidade correta
+    time_pct = max(0.001, min(float(time_pct), 50.0))
+    timepercent = time_pct * u.percent
 
-    # polarização: manter mapeamento existente
+    # polarização
     pol = (current_user.polarization or 'vertical').lower()
     polarization = 1 if pol == 'vertical' else 0
 
-    # versão da recomendação P.452
+    # versão P.452
     version = current_user.p452_version or 16
     if version not in (14, 16):
         version = 16
 
-    # limites de escala para o mapa (dBµV/m etc.)
+    # escala manual de colormap vinda da UI
     min_valu = _coerce_optional(data.get('minSignalLevel'))
     max_valu = _coerce_optional(data.get('maxSignalLevel'))
 
-    # resolução do raster / grid
+    # resolução do raster (em função do raio)
     map_resolution = _select_map_resolution(radius_km)
 
-    # bounds geodésicos / caixa do mapa
+    # bounding box geodésico aproximado
     bounds = calculate_geodesic_bounds(long, lati, radius_km)
+
+    # derivar tamanho angular em graus para a janela SRTM
+    # aprox grosseira: 1 grau ~111.32 km
     km_per_degree = 111.32
     diameter_deg = max((2.0 * radius_km) / km_per_degree, 0.01)
     map_size_lon = map_size_lat = diameter_deg * u.deg
 
-    # barra de cor fora do mapa
+    # bounding box da colorbar (faixa horizontal fina no topo do mapa)
     colorbar_height = max(diameter_deg * 0.05, 0.005)
     colorbar_bounds = {
         'north': bounds['north'],
@@ -1881,48 +2010,47 @@ def calculate_coverage():
         'west':  bounds['west']
     }
 
-    # condições atmosféricas locais
-    temperature_k = current_user.temperature_k if current_user.temperature_k else 293.15
-    pressure_hpa = current_user.pressure_hpa if current_user.pressure_hpa else 1013.0
+    # condições atmosféricas
+    # OBS: estes campos assumem que você já salvou Kelvin / hPa / g/m³ em current_user
+    temperature_k = current_user.temperature_k if current_user.temperature_k else 293.15  # ~20°C
+    pressure_hpa  = current_user.pressure_hpa  if current_user.pressure_hpa  else 1013.0
     water_density = current_user.water_density if current_user.water_density else 7.5
     if water_density is None or (isinstance(water_density, float) and math.isnan(water_density)):
         water_density = 7.5
 
     temperature = temperature_k * u.K
-    pressure = pressure_hpa * u.hPa
+    pressure    = pressure_hpa * u.hPa
 
-    # classificação de clutter (urbano, suburbano, etc.)
+    # clutter / ambiente de propagação
     modelo = current_user.propagation_model
     if modelo == 'modelo1':
         zone_t, zone_r = pathprof.CLUTTER.URBAN, pathprof.CLUTTER.URBAN
     elif modelo == 'modelo2':
         zone_t, zone_r = pathprof.CLUTTER.SUBURBAN, pathprof.CLUTTER.SUBURBAN
     elif modelo == 'modelo3':
+        # ATENÇÃO: aqui você associou "Rural" a TROPICAL_FOREST antes. Ajuste se quiser.
         zone_t, zone_r = pathprof.CLUTTER.TROPICAL_FOREST, pathprof.CLUTTER.TROPICAL_FOREST
     elif modelo == 'modelo4':
         zone_t, zone_r = pathprof.CLUTTER.CONIFEROUS_TREES, pathprof.CLUTTER.CONIFEROUS_TREES
     else:
-        # modelo5 ou qualquer coisa desconhecida
         zone_t, zone_r = pathprof.CLUTTER.UNKNOWN, pathprof.CLUTTER.UNKNOWN
 
-    # --- altura do terreno / cache SRTM ---
+    # -------------------------------
+    # 2. SRTM / PERFIL DE TERRENO / ATENUAÇÃO P.452
+    # -------------------------------
     with pathprof.SrtmConf.set(
         srtm_dir='./SRTM',
         download='missing',
         server='viewpano'
     ):
         hprof_cache = pathprof.height_map_data(
-            lon_rt,
-            lat_rt,
-            map_size_lon,
-            map_size_lat,
+            lon_rt, lat_rt,
+            map_size_lon, map_size_lat,
             map_resolution=map_resolution,
             zone_t=zone_t,
             zone_r=zone_r,
         )
 
-    # --- cálculo de atenuação P.452 ---
-    # CORRIGIDO: timepercent já tem unidade u.percent, não multiplicar de novo
     results = pathprof.atten_map_fast(
         freq=frequency,
         temperature=temperature,
@@ -1936,11 +2064,12 @@ def calculate_coverage():
         base_water_density=(water_density if water_density is not None else 7.5) * u.g / u.m**3
     )
 
-    # coordenadas do grid
-    _lons = hprof_cache['xcoords']
-    _lats = hprof_cache['ycoords']
+    _lons = hprof_cache['xcoords']  # array 1D longitudes
+    _lats = hprof_cache['ycoords']  # array 1D latitudes
 
-    # --- extrair mapas de perdas individuais ---
+    # -------------------------------
+    # 3. MAPAS DE PERDA
+    # -------------------------------
     loss_maps = {}
     for key in ('L_b0p', 'L_bd', 'L_bs', 'L_ba', 'L_b', 'L_b_corr'):
         if key in results and results[key] is not None:
@@ -1949,62 +2078,67 @@ def calculate_coverage():
             except Exception:
                 loss_maps[key] = np.asarray(results[key], dtype=float)
 
-    # CORRIGIDO: não usar 'or' em arrays numpy
     if 'L_b_corr' in loss_maps:
         combined_loss_map = loss_maps['L_b_corr']
     elif 'L_b' in loss_maps:
         combined_loss_map = loss_maps['L_b']
     else:
-        # fallback absoluto
         combined_loss_map = results['L_b'].to(u.dB).value
 
-    # garantir que seja Quantity em dB para downstream
-    _total_atten = u.Quantity(combined_loss_map, u.dB)
+    total_path_loss_db = np.asarray(combined_loss_map, dtype=float)
+    _total_atten = u.Quantity(total_path_loss_db, u.dB)
 
-    # converter lon/lat para graus puros
+    # converter coords pra float "graus"
     lons_deg = _to_degree_array(_lons)
     lats_deg = _to_degree_array(_lats)
     lon_center_deg = float(long)
     lat_center_deg = float(lati)
 
-    # --- padrão de antena TX (ajuste horizontal/vertical) ---
+    # -------------------------------
+    # 4. PADRÃO DE ANTENA / ORIENTAÇÃO
+    # -------------------------------
     gain_components = _compute_gain_components(current_user, hprof_cache)
     horizontal_gain_grid_db = gain_components['horizontal_gain_grid_db']
-    vertical_gain_grid_db = gain_components['vertical_gain_grid_db']
+    vertical_gain_grid_db   = gain_components['vertical_gain_grid_db']
 
     base_shape = np.asarray(_total_atten.to(u.dB).value, dtype=float).shape
 
-    # garantir broadcasting correto
-    if np.isscalar(horizontal_gain_grid_db):
-        horizontal_gain_grid_db = np.zeros(base_shape, dtype=float)
-    else:
-        horizontal_gain_grid_db = np.asarray(horizontal_gain_grid_db, dtype=float)
+    def _ensure_grid(arr):
+        if np.isscalar(arr) or arr is None:
+            # se veio só um escalar (ganho uniforme), gera grade de zeros
+            return np.zeros(base_shape, dtype=float)
+        return np.asarray(arr, dtype=float)
 
-    if np.isscalar(vertical_gain_grid_db):
-        vertical_gain_grid_db = np.zeros(base_shape, dtype=float)
-    else:
-        vertical_gain_grid_db = np.asarray(vertical_gain_grid_db, dtype=float)
+    horizontal_gain_grid_db = _ensure_grid(horizontal_gain_grid_db)
+    vertical_gain_grid_db   = _ensure_grid(vertical_gain_grid_db)
 
-    # --- orçamento de enlace (Friis em dB) ---
-    # Potência TX em dBm
+    # Correção de orientação do padrão:
+    # - queremos alinhar convenção (linhas=i → latitude decrescendo, colunas=j → longitude crescente)
+    # - np.rot90(..., k=3) = rotacionar ~90° horário
+    if horizontal_gain_grid_db.shape == base_shape:
+        horizontal_gain_grid_db = np.rot90(horizontal_gain_grid_db, k=3)
+    if vertical_gain_grid_db.shape == base_shape:
+        vertical_gain_grid_db   = np.rot90(vertical_gain_grid_db,   k=3)
+
+    # -------------------------------
+    # 5. LINK BUDGET / CAMPO RX
+    # -------------------------------
+    # Ptx em dBm
     P_dBm = 10.0 * math.log10(Ptx_W / 0.001)
 
-    # Perdas fixas de sistema (cabos, conectores) em dB
+    # perdas fixas
     Loss_dB = float(loss)
 
-    # Perda de percurso por célula (dB) vinda da P.452
-    total_path_loss_db = np.asarray(_total_atten.to(u.dB).value, dtype=float)
-
-    # Ganho efetivo da ANTENA TX na direção do ponto (dBi)
+    # ganho TX efetivo ponto-a-ponto por pixel:
+    #   Gtx_eff = G_pico + (padrão horizontal) + (padrão vertical)
     effective_tx_gain_db = (
         float(ganho_pico_dBi)
         + horizontal_gain_grid_db
         + vertical_gain_grid_db
     )
 
-    # CORRIGIDO:
-    # Potência recebida no conector da RX em dBm:
-    # Prx = Ptx_dBm + Gtx_eff(dBi) + Grx_dBi - Loss_sist - L_path
+    # Friis em dB:
+    # Prx(dBm) = Ptx(dBm) + Gtx_eff(dB) + Grx(dBi) - Loss_sist(dB) - L_path(dB)
     received_power_dbm = (
         P_dBm
         + effective_tx_gain_db
@@ -2014,8 +2148,8 @@ def calculate_coverage():
     )
     received_power_dbm = np.asarray(received_power_dbm, dtype=float)
 
-    # --- Campo elétrico em dBµV/m ---
-    # Relação física: E(dBµV/m) = Prx(dBm) - Grx(dBi) + 77.2 + 20*log10(f_MHz)
+    # Campo elétrico equivalente [dBµV/m]
+    # E = Prx(dBm) - Grx(dBi) + 77.2 + 20log10(f_MHz)
     freq_mhz = max(float(freq_input_mhz), 0.1)
     field_levels_dbuv = (
         received_power_dbm
@@ -2025,36 +2159,67 @@ def calculate_coverage():
     )
     field_levels_dbuv = np.asarray(field_levels_dbuv, dtype=float)
 
-    # --- limitar ao raio solicitado ---
-    dist_map_km = hprof_cache.get('dist_map')
-    grid_shape = field_levels_dbuv.shape
-    if isinstance(dist_map_km, np.ndarray):
-        if dist_map_km.shape != grid_shape:
-            dist_map_km = None
-    else:
-        dist_map_km = None
+    # -------------------------------
+    # 6. MÁSCARA CIRCULAR DO RAIO (SEM BURACOS)
+    # -------------------------------
+    # Em vez de depender de hprof_cache['dist_map'] (que pode faltar ou ter shape diferente),
+    # vamos calcular sempre a distância geodésica Haversine entre cada pixel e o centro TX.
 
-    if dist_map_km is not None:
-        valid_mask = np.asarray(dist_map_km, dtype=float) <= radius_km
-    else:
-        valid_mask = np.ones_like(field_levels_dbuv, dtype=bool)
+    # grade 2D de lon/lat alinhada com field_levels_dbuv
+    lon_grid, lat_grid = np.meshgrid(lons_deg, lats_deg)
 
-    # mascarar pontos fora do raio para visualização
-    field_levels_plot = np.array(field_levels_dbuv, copy=True)
-    field_levels_plot[~valid_mask] = np.nan
+    def _haversine_km(lat1, lon1, lat2, lon2):
+        R = 6371.0  # km
+        lat1r = np.radians(lat1)
+        lon1r = np.radians(lon1)
+        lat2r = np.radians(lat2)
+        lon2r = np.radians(lon2)
+        dlat  = lat2r - lat1r
+        dlon  = lon2r - lon1r
+        a = np.sin(dlat / 2.0)**2 + np.cos(lat1r) * np.cos(lat2r) * np.sin(dlon / 2.0)**2
+        return 2.0 * R * np.arcsin(np.sqrt(a))
 
-    # escala dBµV/m
+    dist_hav_km = _haversine_km(lat_grid, lon_grid, lat_center_deg, lon_center_deg)
+
+    # máscara do disco: dentro do raio -> True
+    inrange_mask = dist_hav_km <= radius_km
+
+    # arrays finais para plot
+    field_levels_plot = np.full_like(field_levels_dbuv, np.nan, dtype=float)
+    power_plot        = np.full_like(received_power_dbm, np.nan, dtype=float)
+
+    field_levels_plot[inrange_mask] = field_levels_dbuv[inrange_mask]
+    power_plot[inrange_mask]        = received_power_dbm[inrange_mask]
+
+    # preencher buracos internos (NaN dentro do disco) com o menor valor válido do disco
+    def _fill_holes_inside(mask_inrange, arr_plot):
+        inside_vals = arr_plot[mask_inrange & np.isfinite(arr_plot)]
+        if inside_vals.size > 0:
+            fill_val = float(np.nanmin(inside_vals))
+            hole_mask = mask_inrange & ~np.isfinite(arr_plot)
+            arr_plot[hole_mask] = fill_val
+        return arr_plot
+
+    field_levels_plot = _fill_holes_inside(inrange_mask, field_levels_plot)
+    power_plot        = _fill_holes_inside(inrange_mask, power_plot)
+
+    # agora:
+    # - dentro do raio: TODO pixel tem valor (sem fatias pretas)
+    # - fora do raio: NaN -> transparente no overlay
+
+    # -------------------------------
+    # 7. AUTO SCALE DE CORES
+    # -------------------------------
     min_val, max_val = _determine_auto_scale(field_levels_plot, min_valu, max_valu)
-    # fallback manual caso usuário não forneça range e auto_scale não defina
     if min_valu is None and max_valu is None:
+        # fallback se usuário não escolheu escala manual
         min_val, max_val = 10.0, 60.0
 
-    # mapa de potência recebida (dBm) para debug/visual
-    power_plot = np.array(received_power_dbm, copy=True)
-    power_plot[~valid_mask] = np.nan
     power_min, power_max = _determine_auto_scale(power_plot, None, None)
 
-    # --- status climático / consistência de local ---
+    # -------------------------------
+    # 8. STATUS CLIMÁTICO / METADADOS
+    # -------------------------------
     climate_lat = current_user.climate_lat
     climate_lon = current_user.climate_lon
     location_changed = True
@@ -2079,7 +2244,9 @@ def calculate_coverage():
                 'Localização confirmada. Ajuste climático ainda não foi registrado para este ponto.'
             )
 
-    # --- renderização das imagens (heatmaps) ---
+    # -------------------------------
+    # 9. RENDERIZAR AS IMAGENS (heatmap)
+    # -------------------------------
     image_dbuv, colorbar_dbuv = _render_field_strength_image(
         lons_deg,
         lats_deg,
@@ -2090,7 +2257,7 @@ def calculate_coverage():
         min_val,
         max_val,
         gain_components['horizontal_pattern_db'],
-        dist_map_km=dist_map_km,
+        dist_map_km=dist_hav_km,  # agora usamos o Haversine
         colorbar_label='Campo elétrico [dBµV/m]'
     )
 
@@ -2104,27 +2271,28 @@ def calculate_coverage():
         power_min,
         power_max,
         gain_components['horizontal_pattern_db'],
-        dist_map_km=dist_map_km,
+        dist_map_km=dist_hav_km,
         colorbar_label='Potência recebida [dBm]'
     )
 
-    # --- dicionários ponto-a-ponto para debug / export ---
+    # -------------------------------
+    # 10. SUMÁRIOS / DICIONÁRIOS
+    # -------------------------------
     signal_level_dict = {}
     signal_level_dict_dbm = {}
     if field_levels_plot.shape == (len(lats_deg), len(lons_deg)):
         for i, lat_val in enumerate(lats_deg):
             for j, lon_val in enumerate(lons_deg):
-                if not valid_mask[i, j]:
+                if not inrange_mask[i, j]:
                     continue
-                key = f"({lat_val}, {lon_val})"
-                value_field = field_levels_dbuv[i, j]
-                value_power = received_power_dbm[i, j]
-                if np.isfinite(value_field):
-                    signal_level_dict[key] = float(value_field)
-                if np.isfinite(value_power):
-                    signal_level_dict_dbm[key] = float(value_power)
+                val_field = field_levels_dbuv[i, j]
+                val_power = received_power_dbm[i, j]
+                if np.isfinite(val_field):
+                    signal_level_dict[f"({lat_val}, {lon_val})"] = float(val_field)
+                if np.isfinite(val_power):
+                    signal_level_dict_dbm[f"({lat_val}, {lon_val})"] = float(val_power)
 
-    # índice aproximado do centro para estatísticas
+    # índice do ponto mais próximo do centro
     lat_diff = np.abs(np.asarray(lats_deg, dtype=float) - lat_center_deg)
     lon_diff = np.abs(np.asarray(lons_deg, dtype=float) - lon_center_deg)
     center_idx_lat = int(np.argmin(np.nan_to_num(lat_diff, nan=np.inf)))
@@ -2147,7 +2315,6 @@ def calculate_coverage():
             summary['center'] = float(np.nanmean(arr_np[finite_mask]))
         return summary
 
-    # sumarizar componentes de perda
     loss_components_summary = {}
     for key, arr in loss_maps.items():
         summary = _summary_from_array(arr)
@@ -2166,7 +2333,6 @@ def calculate_coverage():
                 return float(np.nanmean(arr_np[finite_mask]))
             return None
 
-    # tipo de caminho no ponto central (LoS, difração, ducting etc.)
     path_type_info = results.get('path_type')
     path_type_value = None
     if path_type_info is not None:
@@ -2183,22 +2349,26 @@ def calculate_coverage():
 
     center_metrics = {
         'path_type': path_type_value,
-        'combined_loss_center_db': _safe_value(combined_loss_map),
+        'combined_loss_center_db': _safe_value(total_path_loss_db),
         'received_power_center_dbm': _safe_value(received_power_dbm),
         'field_center_dbuv_m': _safe_value(field_levels_dbuv),
         'effective_gain_center_db': _safe_value(effective_tx_gain_db),
         'tx_power_dbm': float(P_dBm),
         'system_losses_db': float(Loss_dB),
-        'frequency_mhz': float(freq_mhz),
+        'frequency_mhz': float(freq_input_mhz),
         'radius_km': float(radius_km),
     }
-    if dist_map_km is not None:
-        try:
-            center_metrics['distance_center_km'] = float(np.asarray(dist_map_km, dtype=float)[center_idx])
-        except Exception:
-            pass
 
-    # --- resposta JSON final ---
+    try:
+        center_metrics['distance_center_km'] = float(
+            np.asarray(dist_hav_km, dtype=float)[center_idx]
+        )
+    except Exception:
+        pass
+
+    # -------------------------------
+    # 11. RESPOSTA
+    # -------------------------------
     return jsonify({
         "images": {
             "dbuv": {
@@ -2216,8 +2386,6 @@ def calculate_coverage():
         },
         "bounds": bounds,
         "colorbar_bounds": colorbar_bounds,
-        "signal_level_dict": signal_level_dict,
-        "signal_level_dict_dbm": signal_level_dict_dbm,
         "scale": {
             "default_unit": "dbuv",
             "min": min_val,
@@ -2237,14 +2405,6 @@ def calculate_coverage():
             if current_user.climate_updated_at else None,
         "gain_components": {
             "base_gain_dbi": float(ganho_pico_dBi),
-            "horizontal_adjustment_db_min":
-                float(np.nanmin(horizontal_gain_grid_db)) if np.ndim(horizontal_gain_grid_db) else 0.0,
-            "horizontal_adjustment_db_max":
-                float(np.nanmax(horizontal_gain_grid_db)) if np.ndim(horizontal_gain_grid_db) else 0.0,
-            "vertical_adjustment_db_min":
-                float(np.nanmin(vertical_gain_grid_db)) if np.ndim(vertical_gain_grid_db) else 0.0,
-            "vertical_adjustment_db_max":
-                float(np.nanmax(vertical_gain_grid_db)) if np.ndim(vertical_gain_grid_db) else 0.0,
             "horizontal_pattern_db":
                 gain_components['horizontal_pattern_db'].tolist()
                 if gain_components['horizontal_pattern_db'] is not None else None,
@@ -2255,7 +2415,11 @@ def calculate_coverage():
         },
         "loss_components": loss_components_summary,
         "center_metrics": center_metrics,
+        "signal_level_dict": signal_level_dict,
+        "signal_level_dict_dbm": signal_level_dict_dbm,
     })
+
+
 
 
 @bp.route('/tx-location', methods=['POST'])
