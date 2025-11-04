@@ -1,26 +1,110 @@
 (function () {
+    const coverageContainer = document.querySelector('.coverage-container');
+    const backButton = document.getElementById('backToHomeBtn');
+
+    if (!coverageContainer) {
+        if (backButton) {
+            backButton.addEventListener('click', () => {
+                window.location.href = '/home';
+            });
+        }
+        return;
+    }
+
+    const bootstrapRef = window.bootstrap || null;
+    const alertsContainer = document.getElementById('coverageAlerts');
+    const lastSavedOutput = document.querySelector('[data-role="last-saved"]');
+
+    const ENGINE_INFO = {
+        p1546: {
+            title: 'Ponto-área · ITU-R P.1546',
+            subtitle: 'Broadcast FM/TV, serviços VHF/UHF e estimativas regionais.',
+            detail: 'Considera climatologia, clutter urbano/suburbano e percentuais de tempo/local para gerar manchas 2D.'
+        },
+        itm: {
+            title: 'Ponto-a-ponto · ITM / ITU-R P.530',
+            subtitle: 'Links LOS/NLOS com análise de perfil e estatística de fading.',
+            detail: 'Utiliza modelos determinísticos para trajetórias específicas, levando em conta curvatura, zonas de Fresnel e clima.'
+        },
+        pycraf: {
+            title: 'Pycraf Path Profile',
+            subtitle: 'Estudos científicos com SRTM/Topodata e clutter customizado.',
+            detail: 'Pipeline integrável para cenários especiais, extraindo métricas detalhadas de atenuação e ganho direcional.'
+        },
+        rt3d: {
+            title: 'Ray Tracing 3D',
+            subtitle: 'Ambientes urbanos densos com malha 3D e multipercursos.',
+            detail: 'Simulações determinísticas com reflexões, difrações e espalhamento — requer malhas de edifícios e recursos dedicados.'
+        }
+    };
+
+    const state = {
+        projectSlug: coverageContainer.dataset.project || '',
+        projectName: coverageContainer.dataset.projectName || '',
+        engine: coverageContainer.dataset.selectedEngine || 'p1546',
+    };
+
+    if (!ENGINE_INFO[state.engine]) {
+        state.engine = 'p1546';
+    }
+
+    const modals = {};
     let map;
     let marker;
-    const modals = {};
-    const modalFactory = window.bootstrap && window.bootstrap.Modal;
+
+    function notify(message, variant = 'success', timeout = 4000) {
+        if (!alertsContainer) {
+            console.log(`[${variant}]`, message);
+            return;
+        }
+        const wrapper = document.createElement('div');
+        wrapper.className = `alert alert-${variant} alert-dismissible fade show`;
+        wrapper.setAttribute('role', 'alert');
+        wrapper.innerHTML = `
+            <span>${message}</span>
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Fechar"></button>
+        `;
+        alertsContainer.appendChild(wrapper);
+        if (timeout) {
+            window.setTimeout(() => {
+                if (bootstrapRef?.Alert) {
+                    bootstrapRef.Alert.getOrCreateInstance(wrapper).close();
+                } else if (wrapper.parentElement) {
+                    wrapper.parentElement.removeChild(wrapper);
+                }
+            }, timeout);
+        }
+    }
+
+    function createFallbackModal(element) {
+        return {
+            show() {
+                element.classList.add('show');
+                element.style.display = 'block';
+                element.removeAttribute('aria-hidden');
+            },
+            hide() {
+                element.classList.remove('show');
+                element.style.display = 'none';
+                element.setAttribute('aria-hidden', 'true');
+            },
+        };
+    }
 
     function initModals() {
         const modalElements = {
             map: document.getElementById('mapModal'),
             coordinates: document.getElementById('coordinatesModal'),
-            success: document.getElementById('successModal'),
-            error: document.getElementById('errorModal'),
         };
 
         Object.entries(modalElements).forEach(([key, element]) => {
             if (element) {
-                modals[key] = modalFactory ? modalFactory.getOrCreateInstance(element) : createFallbackModal(element);
+                modals[key] = bootstrapRef ? bootstrapRef.Modal.getOrCreateInstance(element) : createFallbackModal(element);
             }
         });
 
-        const mapElement = modalElements.map;
-        if (mapElement && modalFactory) {
-            mapElement.addEventListener('shown.bs.modal', () => {
+        if (modalElements.map && bootstrapRef) {
+            modalElements.map.addEventListener('shown.bs.modal', () => {
                 if (map) {
                     google.maps.event.trigger(map, 'resize');
                 }
@@ -28,30 +112,316 @@
         }
     }
 
-    async function carregarDadosUsuario() {
+    function setEngine(engine) {
+        if (!ENGINE_INFO[engine]) {
+            engine = 'p1546';
+        }
+        state.engine = engine;
+        document.querySelectorAll('input[name="coverageEngine"]').forEach((input) => {
+            const isActive = input.value === engine;
+            input.checked = isActive;
+            input.nextElementSibling?.classList.toggle('active', isActive);
+        });
+        const info = ENGINE_INFO[engine] || ENGINE_INFO.p1546;
+        const titleEl = document.getElementById('engineDescriptionTitle');
+        const detailEl = document.getElementById('engineDescriptionDetail');
+        if (titleEl) {
+            titleEl.textContent = info.title;
+        }
+        if (detailEl) {
+            detailEl.textContent = info.detail;
+        }
+    }
+
+    function updateLastSaved(value) {
+        if (!lastSavedOutput) return;
+        if (!value) {
+            lastSavedOutput.textContent = '—';
+            return;
+        }
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) {
+            lastSavedOutput.textContent = value;
+            return;
+        }
+        lastSavedOutput.textContent = date.toLocaleString();
+    }
+
+    function parseNumber(value) {
+        const number = parseFloat(value);
+        return Number.isFinite(number) ? number : null;
+    }
+
+    function setFieldValue(id, value) {
+        const field = document.getElementById(id);
+        if (!field) return;
+        if (value === null || value === undefined || Number.isNaN(value)) {
+            field.value = '';
+        } else {
+            field.value = value;
+        }
+    }
+
+    function setSelectValue(id, value) {
+        const field = document.getElementById(id);
+        if (!field) return;
+        if (value === null || value === undefined || value === '') {
+            field.value = '';
+            return;
+        }
+        const optionExists = Array.from(field.options).some((opt) => opt.value === value);
+        field.value = optionExists ? value : '';
+    }
+
+    function replaceMinus(value) {
+        return typeof value === 'string' ? value.replace(/[−]/g, '-') : value;
+    }
+
+    function setCoordinatesText(lat, lon) {
+        const coordinatesField = document.getElementById('coordinates');
+        if (!coordinatesField) {
+            return;
+        }
+        if (lat === null || lat === undefined || lon === null || lon === undefined) {
+            coordinatesField.value = '';
+        } else {
+            coordinatesField.value = `Latitude: ${parseFloat(lat).toFixed(6)}, Longitude: ${parseFloat(lon).toFixed(6)}`;
+        }
+        updateGenerateButton();
+    }
+
+    function parseCoordinatesFromField() {
+        const coordinatesField = document.getElementById('coordinates');
+        if (!coordinatesField || !coordinatesField.value) {
+            return null;
+        }
+        const raw = replaceMinus(coordinatesField.value.trim());
+        const match = raw.match(/Latitude:\s*([-+]?\d+(?:\.\d+)?),\s*Longitude:\s*([-+]?\d+(?:\.\d+)?)/i);
+        if (!match) {
+            return null;
+        }
+        const lat = parseFloat(match[1]);
+        const lon = parseFloat(match[2]);
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+            return null;
+        }
+        return { lat, lon };
+    }
+
+    function updateGenerateButton() {
+        const generateButton = document.getElementById('generateCoverageButton');
+        if (!generateButton) return;
+        const coords = parseCoordinatesFromField();
+        const radiusField = document.getElementById('radiusKm');
+        const radiusValue = radiusField ? parseFloat(radiusField.value) : NaN;
+        const radiusValid = !Number.isNaN(radiusValue) && radiusValue > 0;
+        generateButton.disabled = !(coords && radiusValid);
+    }
+
+    async function loadData() {
+        if (!state.projectSlug) {
+            return;
+        }
         try {
-            const response = await fetch('/carregar-dados');
+            const params = new URLSearchParams({ project: state.projectSlug });
+            const response = await fetch(`/carregar-dados?${params.toString()}`);
             if (!response.ok) {
-                throw new Error('Falha ao carregar dados do usuário');
+                throw new Error('Não foi possível carregar os parâmetros do projeto.');
             }
             const data = await response.json();
-            Object.entries(data).forEach(([key, value]) => {
-                const input = document.getElementById(key);
-                if (input) {
-                    input.value = value ?? '';
-                }
-            });
-            if (data.latitude && data.longitude) {
-                document.getElementById('coordinates').value = `Latitude: ${data.latitude}, Longitude: ${data.longitude}`;
+            const projectSettings = data.projectSettings || {};
+
+            setFieldValue('towerHeight', data.towerHeight);
+            setFieldValue('rxHeight', data.rxHeight);
+            setFieldValue('Total_loss', data.Total_loss);
+            setFieldValue('timePercentage', data.timePercentage);
+            setSelectValue('polarization', data.polarization ? data.polarization.toLowerCase() : '');
+            setSelectValue('p452Version', data.p452Version ? String(data.p452Version) : '');
+            setFieldValue('frequency', data.frequency);
+            setFieldValue('transmissionPower', data.transmissionPower);
+            setFieldValue('antennaGain', data.antennaGain);
+            setFieldValue('rxGain', data.rxGain);
+            setFieldValue('antennaTilt', data.antennaTilt);
+            setFieldValue('antennaDirection', data.antennaDirection);
+            setFieldValue('temperature', data.temperature);
+            setFieldValue('pressure', data.pressure);
+            setFieldValue('waterDensity', data.waterDensity);
+            setSelectValue('propagationModel', data.propagationModel);
+            setSelectValue('serviceType', data.serviceType || data.service);
+
+            const radiusFromServer = data.radius ?? projectSettings.radius ?? (projectSettings.lastCoverage?.radius_km);
+            setFieldValue('radiusKm', radiusFromServer ?? '');
+            setFieldValue('minSignalLevel', data.minSignalLevel ?? projectSettings.minSignalLevel ?? '');
+            setFieldValue('maxSignalLevel', data.maxSignalLevel ?? projectSettings.maxSignalLevel ?? '');
+
+            const nameLabel = document.getElementById('txLocationName');
+            if (nameLabel) {
+                nameLabel.textContent = data.txLocationName || '-';
             }
-            if (data.nomeUsuario) {
-                const userName = document.getElementById('userName');
-                if (userName) {
-                    userName.textContent = data.nomeUsuario;
-                }
+            const elevationLabel = document.getElementById('txElevation');
+            if (elevationLabel) {
+                elevationLabel.textContent = data.txElevation ?? '-';
+            }
+
+            if (data.latitude !== undefined && data.longitude !== undefined && data.latitude !== null && data.longitude !== null) {
+                setCoordinatesText(data.latitude, data.longitude);
+            } else {
+                setCoordinatesText(null, null);
+            }
+
+            const engineToApply = data.coverageEngine || state.engine;
+            setEngine(engineToApply);
+
+            if (data.projectLastSavedAt) {
+                updateLastSaved(data.projectLastSavedAt);
+            } else if (projectSettings.lastCoverage && projectSettings.lastCoverage.generated_at) {
+                updateLastSaved(projectSettings.lastCoverage.generated_at);
             }
         } catch (error) {
             console.error(error);
+            notify(error.message || 'Falha ao carregar parâmetros.', 'danger');
+        }
+    }
+
+    function collectPayload() {
+        const payload = {
+            propagationModel: document.getElementById('propagationModel')?.value || null,
+            serviceType: document.getElementById('serviceType')?.value || null,
+            Total_loss: parseNumber(document.getElementById('Total_loss')?.value),
+            timePercentage: parseNumber(document.getElementById('timePercentage')?.value),
+            polarization: document.getElementById('polarization')?.value || null,
+            p452Version: document.getElementById('p452Version')?.value || null,
+            frequency: parseNumber(document.getElementById('frequency')?.value),
+            transmissionPower: parseNumber(document.getElementById('transmissionPower')?.value),
+            antennaGain: parseNumber(document.getElementById('antennaGain')?.value),
+            rxGain: parseNumber(document.getElementById('rxGain')?.value),
+            antennaTilt: parseNumber(document.getElementById('antennaTilt')?.value),
+            antennaDirection: parseNumber(document.getElementById('antennaDirection')?.value),
+            towerHeight: parseNumber(document.getElementById('towerHeight')?.value),
+            rxHeight: parseNumber(document.getElementById('rxHeight')?.value),
+            temperature: parseNumber(document.getElementById('temperature')?.value),
+            pressure: parseNumber(document.getElementById('pressure')?.value),
+            waterDensity: parseNumber(document.getElementById('waterDensity')?.value),
+            radius: parseNumber(document.getElementById('radiusKm')?.value),
+            minSignalLevel: parseNumber(document.getElementById('minSignalLevel')?.value),
+            maxSignalLevel: parseNumber(document.getElementById('maxSignalLevel')?.value),
+        };
+
+        const coords = parseCoordinatesFromField();
+        if (coords) {
+            payload.latitude = coords.lat;
+            payload.longitude = coords.lon;
+        }
+
+        return payload;
+    }
+
+    async function persist(mode = 'save') {
+        if (!state.projectSlug) {
+            notify('Selecione um projeto antes de salvar os parâmetros.', 'warning');
+            return;
+        }
+
+        const payload = collectPayload();
+        payload.coverageEngine = state.engine;
+        payload.projectSlug = state.projectSlug;
+
+        const url = `/salvar-dados?project=${encodeURIComponent(state.projectSlug)}`;
+        const saveButton = document.getElementById('saveCoverageBtn');
+        const generateButton = document.getElementById('generateCoverageButton');
+
+        const targetButton = mode === 'generate' ? generateButton : saveButton;
+        const originalLabel = targetButton ? targetButton.innerHTML : '';
+
+        if (targetButton) {
+            targetButton.disabled = true;
+            targetButton.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Processando...';
+        }
+
+        try {
+            const response = await axios.post(url, payload);
+            const data = response.data || {};
+            const isGenerate = mode === 'generate';
+            notify(
+                isGenerate ? 'Parâmetros salvos. Iniciando geração da cobertura...' : 'Parâmetros salvos com sucesso.',
+                isGenerate ? 'info' : 'success',
+                isGenerate ? 2000 : 4000,
+            );
+
+            if (data.projectSettings && data.projectSettings.lastSavedAt) {
+                updateLastSaved(data.projectSettings.lastSavedAt);
+            }
+
+            if (isGenerate) {
+                await runCoverage(payload);
+            }
+        } catch (error) {
+            console.error(error);
+            const message = mode === 'generate'
+                ? (error?.message || 'Falha ao gerar a cobertura.')
+                : 'Não foi possível salvar os parâmetros.';
+            notify(message, 'danger');
+        } finally {
+            if (targetButton) {
+                targetButton.disabled = false;
+                targetButton.innerHTML = originalLabel;
+            }
+        }
+    }
+
+    async function runCoverage(savedPayload = {}) {
+        if (!state.projectSlug) {
+            notify('Selecione um projeto antes de gerar a cobertura.', 'warning');
+            return;
+        }
+
+        const coords = parseCoordinatesFromField();
+        if (!coords) {
+            notify('Defina as coordenadas da TX antes de gerar a cobertura.', 'warning');
+            return;
+        }
+
+        const radiusValue = savedPayload.radius ?? parseNumber(document.getElementById('radiusKm')?.value) ?? 20;
+        const coveragePayload = {
+            projectSlug: state.projectSlug,
+            coverageEngine: state.engine,
+            radius: radiusValue,
+            minSignalLevel: savedPayload.minSignalLevel ?? parseNumber(document.getElementById('minSignalLevel')?.value),
+            maxSignalLevel: savedPayload.maxSignalLevel ?? parseNumber(document.getElementById('maxSignalLevel')?.value),
+            customCenter: { lat: coords.lat, lng: coords.lon },
+        };
+
+        notify('Gerando cobertura...', 'info', 0);
+
+        try {
+            const response = await fetch('/calculate-coverage', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(coveragePayload),
+            });
+
+            if (!response.ok) {
+                const errorPayload = await response.json().catch(() => ({}));
+                const message = errorPayload?.error || errorPayload?.message || 'Falha ao gerar a cobertura.';
+                throw new Error(message);
+            }
+
+            const data = await response.json();
+            if (data.generated_at) {
+                updateLastSaved(data.generated_at);
+            }
+
+            notify('Cobertura gerada com sucesso! Atualizando visão do projeto...', 'success');
+
+            window.setTimeout(() => {
+                window.location.reload();
+            }, 1200);
+
+            return data;
+        } catch (error) {
+            console.error(error);
+            notify(error.message || 'Falha ao gerar a cobertura.', 'danger');
+            throw error;
         }
     }
 
@@ -72,18 +442,9 @@
                 throw new Error(message);
             }
             const data = await response.json();
-            if (data.temperature !== undefined) {
-                const temperatureField = document.getElementById('temperature');
-                if (temperatureField) temperatureField.value = data.temperature;
-            }
-            if (data.pressure !== undefined) {
-                const pressureField = document.getElementById('pressure');
-                if (pressureField) pressureField.value = data.pressure;
-            }
-            if (data.waterDensity !== undefined) {
-                const waterDensityField = document.getElementById('waterDensity');
-                if (waterDensityField) waterDensityField.value = data.waterDensity;
-            }
+            setFieldValue('temperature', data.temperature);
+            setFieldValue('pressure', data.pressure);
+            setFieldValue('waterDensity', data.waterDensity);
             statusEl.textContent = `Clima atualizado${data.municipality ? ` para ${data.municipality}` : ''}. Amostra de ${data.daysSampled || 0} dias.`;
         } catch (error) {
             console.error(error);
@@ -93,8 +454,85 @@
         }
     }
 
+    function placeMarkerAndPanTo(latLng) {
+        if (marker) {
+            marker.setMap(null);
+        }
+        marker = new google.maps.Marker({
+            position: latLng,
+            map,
+        });
+        map.panTo(latLng);
+
+        const latitude = latLng.lat().toFixed(6);
+        const longitude = latLng.lng().toFixed(6);
+        setCoordinatesText(latitude, longitude);
+    }
+
+    function saveCoordinates() {
+        if (!marker) {
+            notify('Selecione um ponto no mapa antes de confirmar.', 'warning');
+            return;
+        }
+        const latitude = marker.getPosition().lat().toFixed(6);
+        const longitude = marker.getPosition().lng().toFixed(6);
+        setCoordinatesText(latitude, longitude);
+        modals.map?.hide();
+    }
+
+    function saveManualCoordinates() {
+        const latDegrees = parseNumber(document.getElementById('latitudeDegrees')?.value);
+        const latMinutes = parseNumber(document.getElementById('latitudeMinutes')?.value) || 0;
+        const latSeconds = parseNumber(document.getElementById('latitudeSeconds')?.value) || 0;
+        const latDirection = document.getElementById('latitudeDirection')?.value || 'N';
+
+        const lonDegrees = parseNumber(document.getElementById('longitudeDegrees')?.value);
+        const lonMinutes = parseNumber(document.getElementById('longitudeMinutes')?.value) || 0;
+        const lonSeconds = parseNumber(document.getElementById('longitudeSeconds')?.value) || 0;
+        const lonDirection = document.getElementById('longitudeDirection')?.value || 'E';
+
+        if (latDegrees === null || lonDegrees === null) {
+            notify('Informe graus para latitude e longitude.', 'warning');
+            return;
+        }
+
+        const latDecimal = (Math.abs(latDegrees) + (latMinutes / 60) + (latSeconds / 3600)) * (latDirection === 'S' ? -1 : 1);
+        const lonDecimal = (Math.abs(lonDegrees) + (lonMinutes / 60) + (lonSeconds / 3600)) * (lonDirection === 'W' ? -1 : 1);
+
+        setCoordinatesText(latDecimal, lonDecimal);
+        modals.coordinates?.hide();
+    }
+
+    function openMapModal() {
+        modals.map?.show();
+    }
+
+    function openManualCoordinatesModal() {
+        modals.coordinates?.show();
+    }
+
+    function fecharModalMapa() {
+        modals.map?.hide();
+    }
+
+    window.initMap = function () {
+        const mapCanvas = document.getElementById('map');
+        if (!mapCanvas) {
+            return;
+        }
+        map = new google.maps.Map(mapCanvas, {
+            center: { lat: -14.235004, lng: -51.92528 },
+            zoom: 4,
+            gestureHandling: 'greedy',
+        });
+
+        map.addListener('click', (event) => {
+            placeMarkerAndPanTo(event.latLng);
+        });
+    };
+
     function updateDMS(decimalFieldId, degreesFieldId, minutesFieldId, secondsFieldId, directionFieldId) {
-        const decimalValue = parseFloat(document.getElementById(decimalFieldId).value);
+        const decimalValue = parseFloat(document.getElementById(decimalFieldId)?.value);
         if (Number.isNaN(decimalValue)) {
             return;
         }
@@ -111,177 +549,56 @@
             minutes = 0;
         }
 
-        document.getElementById(degreesFieldId).value = degrees * sign;
-        document.getElementById(minutesFieldId).value = minutes;
-        document.getElementById(secondsFieldId).value = seconds;
-        document.getElementById(directionFieldId).value = sign >= 0 ? 'N' : 'S';
+        const degreesField = document.getElementById(degreesFieldId);
+        const minutesField = document.getElementById(minutesFieldId);
+        const secondsField = document.getElementById(secondsFieldId);
+        const directionField = document.getElementById(directionFieldId);
+
+        if (degreesField) degreesField.value = degrees * sign;
+        if (minutesField) minutesField.value = minutes;
+        if (secondsField) secondsField.value = seconds;
+        if (directionField) directionField.value = sign >= 0 ? (directionFieldId.includes('latitude') ? 'N' : 'E') : (directionFieldId.includes('latitude') ? 'S' : 'W');
     }
 
     function updateDecimal(degreesFieldId, minutesFieldId, secondsFieldId, directionFieldId, decimalFieldId) {
-        const degrees = parseFloat(document.getElementById(degreesFieldId).value) || 0;
-        const minutes = parseFloat(document.getElementById(minutesFieldId).value) || 0;
-        const seconds = parseFloat(document.getElementById(secondsFieldId).value) || 0;
-        const directionValue = document.getElementById(directionFieldId).value;
-        const direction = directionValue === 'N' || directionValue === 'E' ? 1 : -1;
+        const degrees = parseFloat(document.getElementById(degreesFieldId)?.value) || 0;
+        const minutes = parseFloat(document.getElementById(minutesFieldId)?.value) || 0;
+        const seconds = parseFloat(document.getElementById(secondsFieldId)?.value) || 0;
+        const directionValue = document.getElementById(directionFieldId)?.value || 'N';
+        const direction = (directionValue === 'N' || directionValue === 'E') ? 1 : -1;
         const decimalValue = degrees + (minutes / 60) + (seconds / 3600);
-        document.getElementById(decimalFieldId).value = (decimalValue * direction).toFixed(6);
-    }
-
-    function placeMarkerAndPanTo(latLng) {
-        if (marker) {
-            marker.setMap(null);
-        }
-        marker = window.marker = new google.maps.Marker({
-            position: latLng,
-            map,
-        });
-        map.panTo(latLng);
-
-        const latitude = latLng.lat().toFixed(6);
-        const longitude = latLng.lng().toFixed(6);
-        document.getElementById('coordinates').value = `Latitude: ${latitude}, Longitude: ${longitude}`;
-
-        const coverageButton = document.getElementById('generateCoverageButton');
-        if (coverageButton) {
-            coverageButton.disabled = false;
-        }
-    }
-
-    function saveCoordinates() {
-        if (!marker) {
-            alert('Por favor, selecione um ponto no mapa.');
-            return;
-        }
-        const latitude = marker.getPosition().lat().toFixed(6);
-        const longitude = marker.getPosition().lng().toFixed(6);
-        document.getElementById('coordinates').value = `Latitude: ${latitude}, Longitude: ${longitude}`;
-        const coverageButton = document.getElementById('generateCoverageButton');
-        if (coverageButton) {
-            coverageButton.disabled = false;
-        }
-        modals.map?.hide();
-    }
-
-    function saveManualCoordinates() {
-        const latitudeDecimal = document.getElementById('latitudeDecimal').value;
-        const latitudeDirection = document.getElementById('latitudeDirection').value;
-        const longitudeDecimal = document.getElementById('longitudeDecimal').value;
-        const longitudeDirection = document.getElementById('longitudeDirection').value;
-
-        if (latitudeDecimal && latitudeDirection && longitudeDecimal && longitudeDirection) {
-            const latitude = `${latitudeDecimal} ${latitudeDirection}`;
-            const longitude = `${longitudeDecimal} ${longitudeDirection}`;
-            document.getElementById('coordinates').value = `Latitude: ${latitude}, Longitude: ${longitude}`;
-            const coverageButton = document.getElementById('generateCoverageButton');
-            if (coverageButton) {
-                coverageButton.disabled = false;
-            }
-            modals.coordinates?.hide();
-        } else {
-            alert('Por favor, preencha todas as coordenadas.');
-        }
-    }
-
-    function openMapModal() {
-        modals.map?.show();
-    }
-
-    function openManualCoordinatesModal() {
-        modals.coordinates?.show();
-    }
-
-    function fecharModalMapa() {
-        modals.map?.hide();
-    }
-
-    async function submitForm() {
-        const form = document.getElementById('coberturaForm');
-        if (!form) {
-            return;
-        }
-
-        const formData = new FormData(form);
-        const coordinates = document.getElementById('coordinates').value;
-        const [latitudePart, longitudePart] = coordinates.replace('Latitude: ', '').replace('Longitude: ', '').split(', ');
-
-        const [latitudeValue, latitudeDirection] = (latitudePart || '').split(' ');
-        const [longitudeValue, longitudeDirection] = (longitudePart || '').split(' ');
-
-        const coerceNumber = (value) => {
-            const num = parseFloat(value);
-            return Number.isFinite(num) ? num : null;
-        };
-
-        const payload = {
-            propagationModel: formData.get('propagationModel'),
-            Total_loss: coerceNumber(formData.get('Total_loss')),
-            antennaGain: coerceNumber(formData.get('antennaGain')),
-            towerHeight: coerceNumber(formData.get('towerHeight')),
-            rxHeight: coerceNumber(formData.get('rxHeight')),
-            rxGain: coerceNumber(formData.get('rxGain')),
-            transmissionPower: coerceNumber(formData.get('transmissionPower')),
-            frequency: coerceNumber(formData.get('frequency')),
-            service: formData.get('serviceType'),
-            latitude: latitudeValue,
-            longitude: longitudeValue,
-            timePercentage: coerceNumber(formData.get('timePercentage')),
-            polarization: formData.get('polarization'),
-            p452Version: formData.get('p452Version'),
-            temperature: coerceNumber(formData.get('temperature')),
-            pressure: coerceNumber(formData.get('pressure')),
-            waterDensity: coerceNumber(formData.get('waterDensity')),
-            antennaDirection: coerceNumber(formData.get('antennaDirection')),
-        };
-
-        const tiltField = formData.get('antennaTilt');
-        if (tiltField !== null && tiltField !== undefined && tiltField !== '') {
-            payload.antennaTilt = parseFloat(tiltField);
-        }
-
-        if (latitudeDirection === 'S') {
-            payload.latitude = `-${latitudeValue}`;
-        }
-        if (longitudeDirection === 'W') {
-            payload.longitude = `-${longitudeValue}`;
-        }
-
-        try {
-            await axios.post('/salvar-dados', payload);
-            modals.success?.show();
-        } catch (error) {
-            console.error(error);
-            modals.error?.show();
-        }
-    }
-
-    window.initMap = function () {
-        map = window.map = new google.maps.Map(document.getElementById('map'), {
-            center: { lat: -14.235004, lng: -51.92528 },
-            zoom: 4,
-            gestureHandling: 'greedy',
-        });
-
-        map.addListener('click', (event) => {
-            placeMarkerAndPanTo(event.latLng);
-        });
-    };
-
-    function askForCoordinates() {
-        const wantsMap = confirm('Deseja posicionar a torre clicando no mapa? Se escolher "Cancelar", você poderá inserir as coordenadas manualmente.');
-        if (wantsMap) {
-            openMapModal();
-        } else {
-            openManualCoordinatesModal();
+        const decimalField = document.getElementById(decimalFieldId);
+        if (decimalField) {
+            decimalField.value = (decimalValue * direction).toFixed(6);
         }
     }
 
     document.addEventListener('DOMContentLoaded', () => {
         initModals();
-        carregarDadosUsuario();
+        setEngine(state.engine);
+        loadData();
+
+        const engineRadios = document.querySelectorAll('input[name="coverageEngine"]');
+        engineRadios.forEach((radio) => {
+            radio.addEventListener('change', (event) => {
+                setEngine(event.target.value);
+            });
+        });
+
+        const projectSwitcher = document.getElementById('projectSwitcher');
+        if (projectSwitcher) {
+            projectSwitcher.addEventListener('change', (event) => {
+                const slug = event.target.value;
+                if (slug) {
+                    const params = new URLSearchParams({ project: slug });
+                    window.location.href = `/calcular-cobertura?${params.toString()}`;
+                }
+            });
+        }
 
         const askCoordinatesBtn = document.getElementById('askCoordinatesBtn');
         if (askCoordinatesBtn) {
-            askCoordinatesBtn.addEventListener('click', askForCoordinates);
+            askCoordinatesBtn.addEventListener('click', openMapModal);
         }
 
         const openManualCoordinatesBtn = document.getElementById('openManualCoordinatesBtn');
@@ -306,17 +623,17 @@
 
         const saveFormBtn = document.getElementById('saveCoverageBtn');
         if (saveFormBtn) {
-            saveFormBtn.addEventListener('click', submitForm);
+            saveFormBtn.addEventListener('click', () => persist('save'));
         }
 
         const generateCoverageBtn = document.getElementById('generateCoverageButton');
         if (generateCoverageBtn) {
-            generateCoverageBtn.addEventListener('click', submitForm);
+            generateCoverageBtn.addEventListener('click', () => persist('generate'));
         }
 
         const refreshDataBtn = document.getElementById('refreshDataBtn');
         if (refreshDataBtn) {
-            refreshDataBtn.addEventListener('click', carregarDadosUsuario);
+            refreshDataBtn.addEventListener('click', loadData);
         }
 
         const loadClimateBtn = document.getElementById('loadClimateBtn');
@@ -324,12 +641,18 @@
             loadClimateBtn.addEventListener('click', carregarClimaPadrao);
         }
 
-        const backButton = document.getElementById('backToHomeBtn');
         if (backButton) {
             backButton.addEventListener('click', () => {
                 window.location.href = '/home';
             });
         }
+
+        const radiusField = document.getElementById('radiusKm');
+        if (radiusField) {
+            radiusField.addEventListener('input', updateGenerateButton);
+        }
+
+        updateGenerateButton();
     });
 
     window.coverageForm = {
@@ -337,29 +660,9 @@
         updateDecimal,
     };
 
-    // exposição de funções para compatibilidade com scripts existentes
-    window.carregarDadosUsuario = carregarDadosUsuario;
-    window.updateDMS = updateDMS;
-    window.updateDecimal = updateDecimal;
+    window.placeMarkerAndPanTo = placeMarkerAndPanTo;
     window.saveCoordinates = saveCoordinates;
     window.saveManualCoordinates = saveManualCoordinates;
-    window.submitForm = submitForm;
-    window.askForCoordinates = askForCoordinates;
+    window.askForCoordinates = openMapModal;
     window.fecharModalMapa = fecharModalMapa;
-    window.placeMarkerAndPanTo = placeMarkerAndPanTo;
-
-    function createFallbackModal(element) {
-        return {
-            show() {
-                element.classList.add('show');
-                element.style.display = 'block';
-                element.removeAttribute('aria-hidden');
-            },
-            hide() {
-                element.classList.remove('show');
-                element.style.display = 'none';
-                element.setAttribute('aria-hidden', 'true');
-            },
-        };
-    }
 })();

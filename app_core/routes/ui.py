@@ -54,11 +54,49 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from extensions import db
 from user import User
+from app_core.models import (
+    Project,
+    Asset,
+    AssetType,
+    CoverageEngine,
+    CoverageJob,
+    CoverageStatus,
+)
+from app_core.email_utils import generate_token, load_token, send_email
+from app_core.storage import ensure_storage_structure, storage_root
+from app_core.utils import (
+    ensure_unique_slug,
+    project_by_slug_or_404,
+    project_to_dict,
+    projects_to_dict,
+    slugify,
+)
 
 matplotlib.use('Agg')
 
 bp = Blueprint('ui', __name__)
 
+
+# === Helper utilities ======================================================
+
+
+def _create_default_project(user: User) -> Project:
+    base_label = user.username or (user.email.split('@')[0] if user.email else 'projeto-atx')
+    slug_candidate = slugify(base_label)
+    slug = ensure_unique_slug(user.uuid, slug_candidate)
+    project = Project(
+        user_uuid=user.uuid,
+        name=f"Projeto de {base_label}",
+        slug=slug,
+        description="Projeto padrão criado automaticamente.",
+    )
+    db.session.add(project)
+    db.session.flush()
+    ensure_storage_structure(str(user.uuid), project.slug)
+    return project
+
+
+# ==========================================================================
 # =========================
 # Helpers para parsing/validação
 # =========================
@@ -446,6 +484,15 @@ def _prepare_tx_object(base_tx, overrides=None, pattern_bytes=None):
 @login_required
 def salvar_dados():
     data = request.get_json(silent=True) or {}
+    project_slug = request.args.get('project') or data.get('projectSlug')
+    project = None
+    if project_slug:
+        project = project_by_slug_or_404(project_slug, current_user.uuid)
+
+    coverage_engine = data.get('coverageEngine') or CoverageEngine.p1546.value
+    valid_engines = {engine.value for engine in CoverageEngine}
+    if coverage_engine not in valid_engines:
+        coverage_engine = CoverageEngine.p1546.value
 
     # 1. Extrair cada campo do payload sem assumir que existe
     #    Se não existir, não sobrescreve o valor atual.
@@ -522,9 +569,45 @@ def salvar_dados():
             version_val = 16
         current_user.p452_version = version_val
 
-    # 4. Commit no banco
+    # 4. Persistir configurações no projeto (snapshot)
+    project_settings_payload = {}
+    temperature_c = (current_user.temperature_k - 273.15) if current_user.temperature_k is not None else None
+    if project:
+        project_settings_payload = {
+            "propagationModel": current_user.propagation_model,
+            "Total_loss": current_user.total_loss,
+            "antennaGain": current_user.antenna_gain,
+            "rxGain": current_user.rx_gain,
+            "transmissionPower": current_user.transmission_power,
+            "frequency": current_user.frequencia,
+            "towerHeight": current_user.tower_height,
+            "rxHeight": current_user.rx_height,
+            "antennaTilt": getattr(current_user, "antenna_tilt", None),
+            "antennaDirection": getattr(current_user, "antenna_direction", None),
+            "timePercentage": current_user.time_percentage,
+            "temperature": temperature_c,
+            "pressure": current_user.pressure_hpa,
+            "waterDensity": current_user.water_density,
+            "serviceType": current_user.servico,
+            "polarization": current_user.polarization,
+            "p452Version": current_user.p452_version,
+            "latitude": current_user.latitude,
+            "longitude": current_user.longitude,
+            "coverageEngine": coverage_engine,
+            "radius": _coerce_float(data.get('radius')) if 'radius' in data else None,
+            "minSignalLevel": _coerce_float(data.get('minSignalLevel')),
+            "maxSignalLevel": _coerce_float(data.get('maxSignalLevel')),
+        }
+        existing_settings = project.settings or {}
+        existing_settings.update({k: v for k, v in project_settings_payload.items() if v is not None})
+        existing_settings["lastSavedAt"] = datetime.utcnow().isoformat()
+        project.settings = existing_settings
+
+    # 5. Commit no banco
     try:
         db.session.add(current_user)
+        if project:
+            db.session.add(project)
         db.session.commit()
     except Exception as e:
         db.session.rollback()
@@ -537,9 +620,8 @@ def salvar_dados():
             "detail": str(e),
         }), 500
 
-    # 5. Retornar o snapshot atualizado para o front
-    #    Isso ajuda a UI a se alinhar com o que realmente ficou salvo.
-    return jsonify({
+    # 6. Retornar snapshot atualizado
+    response_payload = {
         "status": "ok",
         "towerHeight": current_user.tower_height,
         "rxHeight": current_user.rx_height,
@@ -551,7 +633,7 @@ def salvar_dados():
         "antennaTilt": getattr(current_user, "antenna_tilt", None),
         "antennaDirection": getattr(current_user, "antenna_direction", None),
         "timePercentage": current_user.time_percentage,
-        "temperature": (current_user.temperature_k - 273.15) if current_user.temperature_k else None,
+        "temperature": temperature_c,
         "pressure": current_user.pressure_hpa,
         "waterDensity": current_user.water_density,
         "propagationModel": current_user.propagation_model,
@@ -560,7 +642,13 @@ def salvar_dados():
         "p452Version": current_user.p452_version,
         "latitude": current_user.latitude,
         "longitude": current_user.longitude,
-    }), 200
+        "coverageEngine": coverage_engine,
+        "projectSlug": project.slug if project else None,
+    }
+    if project:
+        response_payload["projectSettings"] = project.settings or {}
+
+    return jsonify(response_payload), 200
 
 @bp.route('/')
 def inicio():
@@ -583,7 +671,40 @@ def antena():
 @login_required
 def calcular_cobertura():
     maps_api_key = get_google_maps_key()
-    return render_template('calcular_cobertura.html', maps_api_key=maps_api_key)
+    projects = (
+        current_user.projects.order_by(Project.created_at.asc()).all()
+        if hasattr(current_user, "projects")
+        else []
+    )
+    requested_slug = request.args.get('project')
+    active_project = None
+    if requested_slug:
+        try:
+            active_project = project_by_slug_or_404(requested_slug, current_user.uuid)
+        except Exception:
+            if projects:
+                active_project = projects[0]
+    elif projects:
+        active_project = projects[0]
+
+    if requested_slug and not active_project:
+        # slug informado mas nenhum projeto encontrado
+        flash('Projeto não encontrado ou sem acesso.', 'error')
+        return redirect(url_for('projects.list_projects'))
+
+    engines = list(CoverageEngine)
+    selected_engine = None
+    if active_project and active_project.settings:
+        selected_engine = active_project.settings.get('coverageEngine')
+
+    return render_template(
+        'calcular_cobertura.html',
+        maps_api_key=maps_api_key,
+        project=active_project,
+        projects=projects,
+        engines=engines,
+        selected_engine=selected_engine,
+    )
 
 @bp.route('/save-map-image', methods=['POST'])
 @login_required
@@ -721,7 +842,7 @@ def mapa():
 @bp.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
-        username = request.form['username']
+        username = request.form['username'].strip()
         password = request.form['password']
         user = User.query.filter_by(username=username).first()
         if user is None:
@@ -730,7 +851,14 @@ def login():
         elif not user.check_password(password):
             error = 'Senha incorreta.'
             return render_template('index.html', error=error)
+        elif not user.is_active:
+            error = 'Conta desativada. Entre em contato com o suporte.'
+            return render_template('index.html', error=error)
+        elif (not user.is_email_confirmed) and not current_app.config.get('ALLOW_UNCONFIRMED', False):
+            flash('Confirme o seu e-mail para acessar a plataforma.', 'warning')
+            return render_template('index.html', error='Confirmação de e-mail pendente.')
         login_user(user)
+        flash('Login realizado com sucesso.', 'success')
         return redirect(url_for('ui.home'))
     return render_template('index.html')
 
@@ -738,7 +866,7 @@ def login():
 def register():
     if request.method == 'POST':
         username = request.form['username']
-        email    = request.form['email']
+        email    = request.form['email'].strip().lower()
         password = request.form['password']
 
         existing_user  = User.query.filter_by(username=username).first()
@@ -752,15 +880,129 @@ def register():
         new_user = User(username=username, email=email)
         new_user.set_password(password)
         db.session.add(new_user)
+        db.session.flush()
+        _create_default_project(new_user)
         db.session.commit()
+
+        token = generate_token(new_user.email, 'confirm')
+        confirm_url = url_for('ui.confirm_email', token=token, _external=True)
+        send_email(
+            "Confirme sua conta ATX Coverage",
+            new_user.email,
+            "email/confirm_email.html",
+            "email/confirm_email.txt",
+            user=new_user,
+            confirm_url=confirm_url,
+        )
+        flash('Cadastro realizado! Verifique seu e-mail para confirmar a conta.', 'success')
         return redirect(url_for('ui.index'))
 
     return render_template('register.html')
 
+
+@bp.route('/auth/confirm/<token>')
+def confirm_email(token):
+    max_age = current_app.config.get('EMAIL_CONFIRM_MAX_AGE', 86400)
+    email = load_token(token, max_age=max_age, expected_purpose='confirm')
+    if not email:
+        flash('Link de confirmação inválido ou expirado.', 'error')
+        return redirect(url_for('ui.index'))
+
+    user = User.query.filter_by(email=email.lower()).first()
+    if user is None:
+        flash('Conta não encontrada para o e-mail informado.', 'error')
+        return redirect(url_for('ui.index'))
+
+    if not user.is_email_confirmed:
+        user.is_email_confirmed = True
+        user.updated_at = datetime.utcnow()
+        db.session.commit()
+        flash('E-mail confirmado com sucesso!', 'success')
+    else:
+        flash('Sua conta já estava confirmada.', 'info')
+
+    if not current_user.is_authenticated:
+        login_user(user)
+    return redirect(url_for('ui.home'))
+
+
+@bp.route('/auth/resend-confirmation', methods=['GET', 'POST'])
+def resend_confirmation():
+    if request.method == 'POST':
+        email = request.form['email'].strip().lower()
+        user = User.query.filter_by(email=email).first()
+        if user and not user.is_email_confirmed:
+            token = generate_token(user.email, 'confirm')
+            confirm_url = url_for('ui.confirm_email', token=token, _external=True)
+            send_email(
+                "Confirme sua conta ATX Coverage",
+                user.email,
+                "email/confirm_email.html",
+                "email/confirm_email.txt",
+                user=user,
+                confirm_url=confirm_url,
+            )
+        flash('Se o e-mail estiver cadastrado e pendente de confirmação, reenviamos as instruções.', 'info')
+        return redirect(url_for('ui.index'))
+    return render_template('auth/resend_confirmation.html')
+
+
+@bp.route('/auth/request-reset', methods=['GET', 'POST'])
+def request_password_reset():
+    if request.method == 'POST':
+        email = request.form['email'].strip().lower()
+        user = User.query.filter_by(email=email).first()
+        if user:
+            token = generate_token(user.email, 'reset')
+            reset_url = url_for('ui.reset_password', token=token, _external=True)
+            send_email(
+                "Redefina sua senha ATX Coverage",
+                user.email,
+                "email/reset_password.html",
+                "email/reset_password.txt",
+                user=user,
+                reset_url=reset_url,
+            )
+        flash('Se o e-mail estiver cadastrado, enviaremos instruções de redefinição.', 'info')
+        return redirect(url_for('ui.index'))
+    return render_template('auth/request_reset.html')
+
+
+@bp.route('/auth/reset/<token>', methods=['GET', 'POST'])
+def reset_password(token):
+    max_age = current_app.config.get('PASSWORD_RESET_MAX_AGE', 7200)
+    email = load_token(token, max_age=max_age, expected_purpose='reset')
+    if not email:
+        flash('Token de redefinição inválido ou expirado.', 'error')
+        return redirect(url_for('ui.index'))
+
+    user = User.query.filter_by(email=email.lower()).first()
+    if user is None:
+        flash('Usuário não encontrado.', 'error')
+        return redirect(url_for('ui.index'))
+
+    error = None
+    if request.method == 'POST':
+        password = request.form['password']
+        confirm_password = request.form['confirm_password']
+        if password != confirm_password:
+            error = 'As senhas não coincidem.'
+        elif len(password) < 8:
+            error = 'A senha deve possuir pelo menos 8 caracteres.'
+        else:
+            user.set_password(password)
+            user.updated_at = datetime.utcnow()
+            db.session.commit()
+            flash('Senha atualizada com sucesso! Faça login com a nova credencial.', 'success')
+            return redirect(url_for('ui.index'))
+    return render_template('auth/reset_password.html', token=token, error=error)
+
+
 @bp.route('/home')
 @login_required
 def home():
-    return render_template('home.html')
+    projects = current_user.projects.order_by(Project.created_at.desc()).all()
+    return render_template('home.html', projects=projects)
 
 # -------- Antena: carregar/mostrar diagramas --------
 
@@ -2004,6 +2246,161 @@ def _render_field_strength_image(lons_deg, lats_deg, field_levels,
 
     return image_base64, colorbar_base64
 
+
+def _persist_coverage_artifacts(user, project, engine_value, request_payload, coverage_payload):
+    if project is None:
+        return None
+
+    engine_enum = CoverageEngine(engine_value)
+    timestamp = datetime.utcnow()
+    timestamp_iso = timestamp.isoformat()
+    base_name = f"coverage_{timestamp.strftime('%Y%m%d_%H%M%S')}_{engine_enum.value}"
+
+    def _json_default(obj):
+        if isinstance(obj, (np.floating, float)):
+            return float(obj)
+        if isinstance(obj, (np.integer, int)):
+            return int(obj)
+        if isinstance(obj, (np.bool_, bool)):
+            return bool(obj)
+        return str(obj)
+
+    def _clean_json(data):
+        if data is None:
+            return None
+        try:
+            return json.loads(json.dumps(data, default=_json_default))
+        except TypeError:
+            return data
+
+    storage_paths = ensure_storage_structure(str(user.uuid), project.slug)
+    coverage_dir = storage_paths.get('assets/coverage')
+    if coverage_dir is None:
+        coverage_dir = storage_root() / str(user.uuid) / project.slug / 'assets' / 'coverage'
+        coverage_dir.mkdir(parents=True, exist_ok=True)
+
+    root_path = storage_root()
+
+    def _decode_image_b64(data_str):
+        if not data_str:
+            return b''
+        return base64.b64decode(data_str)
+
+    img_dbuv_b64 = coverage_payload.get('images', {}).get('dbuv', {}).get('image')
+    colorbar_b64 = coverage_payload.get('images', {}).get('dbuv', {}).get('colorbar')
+
+    heatmap_bytes = _decode_image_b64(img_dbuv_b64)
+    colorbar_bytes = _decode_image_b64(colorbar_b64)
+
+    heatmap_path = coverage_dir / f"{base_name}_field.png"
+    colorbar_path = coverage_dir / f"{base_name}_colorbar.png"
+    json_path = coverage_dir / f"{base_name}_summary.json"
+
+    if heatmap_bytes:
+        heatmap_path.write_bytes(heatmap_bytes)
+    if colorbar_bytes:
+        colorbar_path.write_bytes(colorbar_bytes)
+
+    summary_payload = {
+        "engine": engine_enum.value,
+        "generated_at": timestamp_iso,
+        "request": _clean_json(request_payload),
+        "center_metrics": _clean_json(coverage_payload.get('center_metrics')),
+        "loss_components": _clean_json(coverage_payload.get('loss_components')),
+        "bounds": _clean_json(coverage_payload.get('bounds')),
+        "colorbar_bounds": _clean_json(coverage_payload.get('colorbar_bounds')),
+        "scale": _clean_json(coverage_payload.get('scale')),
+        "tx_location": _clean_json(coverage_payload.get('center')),
+    }
+    json_path.write_text(json.dumps(summary_payload, ensure_ascii=False, indent=2, default=_json_default))
+
+    heatmap_asset = Asset(
+        project_id=project.id,
+        type=AssetType.heatmap,
+        path=str(heatmap_path.relative_to(root_path)),
+        mime_type='image/png',
+        byte_size=heatmap_path.stat().st_size if heatmap_path.exists() else 0,
+        meta={
+            "engine": engine_enum.value,
+            "generated_at": timestamp_iso,
+            "unit": coverage_payload.get('images', {}).get('dbuv', {}).get('unit'),
+            "radius_km": coverage_payload.get('requested_radius_km'),
+        },
+    )
+    db.session.add(heatmap_asset)
+
+    json_asset = Asset(
+        project_id=project.id,
+        type=AssetType.json,
+        path=str(json_path.relative_to(root_path)),
+        mime_type='application/json',
+        byte_size=json_path.stat().st_size if json_path.exists() else 0,
+        meta={
+            "engine": engine_enum.value,
+            "generated_at": timestamp_iso,
+        },
+    )
+    db.session.add(json_asset)
+
+    colorbar_asset = None
+    if colorbar_bytes:
+        colorbar_asset = Asset(
+            project_id=project.id,
+            type=AssetType.png,
+            path=str(colorbar_path.relative_to(root_path)),
+            mime_type='image/png',
+            byte_size=colorbar_path.stat().st_size if colorbar_path.exists() else 0,
+            meta={
+                "engine": engine_enum.value,
+                "generated_at": timestamp_iso,
+                "label": coverage_payload.get('images', {}).get('dbuv', {}).get('label'),
+            },
+        )
+        db.session.add(colorbar_asset)
+
+    db.session.flush()
+
+    job = CoverageJob(
+        project_id=project.id,
+        status=CoverageStatus.succeeded,
+        engine=engine_enum,
+        inputs={
+            "request": request_payload,
+            "project_settings": _clean_json(project.settings),
+        },
+        metrics={
+            "center_metrics": _clean_json(coverage_payload.get('center_metrics')),
+            "loss_components": _clean_json(coverage_payload.get('loss_components')),
+        },
+        outputs_asset_id=heatmap_asset.id,
+        started_at=timestamp,
+        finished_at=timestamp,
+    )
+    db.session.add(job)
+
+    settings = project.settings or {}
+    last_coverage = {
+        "generated_at": timestamp_iso,
+        "engine": engine_enum.value,
+        "asset_id": str(heatmap_asset.id),
+        "asset_path": heatmap_asset.path,
+        "json_asset_id": str(json_asset.id),
+        "radius_km": coverage_payload.get('requested_radius_km'),
+        "center_metrics": _clean_json(coverage_payload.get('center_metrics')),
+    }
+    if colorbar_asset:
+        last_coverage["colorbar_asset_id"] = str(colorbar_asset.id)
+
+    settings['lastCoverage'] = last_coverage
+    project.settings = settings
+
+    return {
+        "heatmap_asset": heatmap_asset,
+        "json_asset": json_asset,
+        "colorbar_asset": colorbar_asset,
+        "job": job,
+        "timestamp": timestamp_iso,
+    }
 def _compute_coverage_map(tx, data, include_arrays=False, label=None):
     """
     Gera todos os artefatos de cobertura (heatmap, barra de cores, metadados)
@@ -2744,7 +3141,35 @@ def _compute_coverage_map(tx, data, include_arrays=False, label=None):
 @login_required
 def calculate_coverage():
     data = request.get_json() or {}
+    project_slug = data.get('projectSlug') or data.get('project_slug')
+    project = None
+    if project_slug:
+        project = project_by_slug_or_404(project_slug, current_user.uuid)
+
+    engine_value = data.get('coverageEngine') or CoverageEngine.p1546.value
+    if engine_value not in {engine.value for engine in CoverageEngine}:
+        engine_value = CoverageEngine.p1546.value
+
     result = _compute_coverage_map(current_user, data)
+
+    persisted = None
+    try:
+        persisted = _persist_coverage_artifacts(current_user, project, engine_value, data, result)
+        db.session.commit()
+    except Exception as exc:
+        current_app.logger.exception('Falha ao persistir artefatos de cobertura: %s', exc)
+        db.session.rollback()
+    else:
+        if persisted:
+            result.setdefault('assets', {})['heatmap'] = {
+                'id': str(persisted['heatmap_asset'].id),
+                'path': persisted['heatmap_asset'].path,
+            }
+            result['coverage_job_id'] = str(persisted['job'].id)
+            result['generated_at'] = persisted['timestamp']
+            if project:
+                result['project_slug'] = project.slug
+
     return jsonify(result)
 
 
@@ -2875,23 +3300,36 @@ def clima_recomendado():
 @bp.route('/visualizar-dados-salvos')
 @login_required
 def visualizar_dados_salvos():
-    user_id = current_user.id
-    dados_salvos = User.query.filter_by(id=user_id).first()
-    if dados_salvos:
-        image_data = {
-            'perfil_img': base64.b64encode(dados_salvos.perfil_img).decode('utf-8') if dados_salvos.perfil_img else None,
-            'cobertura_img': base64.b64encode(dados_salvos.cobertura_img).decode('utf-8') if dados_salvos.cobertura_img else None,
-            'antenna_pattern_img_dia_H': base64.b64encode(dados_salvos.antenna_pattern_img_dia_H).decode('utf-8') if dados_salvos.antenna_pattern_img_dia_H else None,
-            'antenna_pattern_img_dia_V': base64.b64encode(dados_salvos.antenna_pattern_img_dia_V).decode('utf-8') if dados_salvos.antenna_pattern_img_dia_V else None,
-        }
-    else:
-        image_data = {
-            'perfil_img': None,
-            'cobertura_img': None,
-            'antenna_pattern_img_dia_H': None,
-            'antenna_pattern_img_dia_V': None,
-        }
-    return render_template('dados_salvos.html', dados_salvos=dados_salvos, image_data=image_data)
+    dados_salvos = current_user
+    image_data = {
+        'perfil_img': base64.b64encode(dados_salvos.perfil_img).decode('utf-8') if dados_salvos.perfil_img else None,
+        'cobertura_img': base64.b64encode(dados_salvos.cobertura_img).decode('utf-8') if dados_salvos.cobertura_img else None,
+        'antenna_pattern_img_dia_H': base64.b64encode(dados_salvos.antenna_pattern_img_dia_H).decode('utf-8') if dados_salvos.antenna_pattern_img_dia_H else None,
+        'antenna_pattern_img_dia_V': base64.b64encode(dados_salvos.antenna_pattern_img_dia_V).decode('utf-8') if dados_salvos.antenna_pattern_img_dia_V else None,
+    }
+
+    coverage_cards = []
+    try:
+        projects = dados_salvos.projects.order_by(Project.created_at.desc()).all()
+    except Exception:
+        projects = []
+
+    for project in projects:
+        settings = project.settings or {}
+        summary = settings.get('lastCoverage')
+        asset_id = summary.get('asset_id') if summary else None
+        if summary and asset_id:
+            coverage_cards.append({
+                'project': project,
+                'engine': summary.get('engine'),
+                'generated_at': summary.get('generated_at'),
+                'radius_km': summary.get('radius_km'),
+                'center_metrics': summary.get('center_metrics'),
+                'preview_url': url_for('projects.asset_preview', slug=project.slug, asset_id=asset_id),
+                'detail_url': url_for('projects.view_project', slug=project.slug),
+            })
+
+    return render_template('dados_salvos.html', dados_salvos=dados_salvos, image_data=image_data, coverage_cards=coverage_cards)
 
 @bp.route('/update-tilt', methods=['POST'])
 @login_required
@@ -2936,6 +3374,13 @@ def carregar_dados():
         user = User.query.get(current_user.id)
         if not user:
             return jsonify({'error': 'Usuário não encontrado.'}), 404
+        project_slug = request.args.get('project')
+        project = None
+        project_settings = {}
+        if project_slug:
+            project = project_by_slug_or_404(project_slug, current_user.uuid)
+            project_settings = project.settings or {}
+
         user_data = {
             'username': user.username,
             'email': user.email,
@@ -2964,7 +3409,22 @@ def carregar_dados():
             'climateUpdatedAt': user.climate_updated_at.isoformat() if user.climate_updated_at else None,
             'climateLatitude': user.climate_lat,
             'climateLongitude': user.climate_lon,
+            'coverageEngine': CoverageEngine.p1546.value,
         }
+
+        if project_settings:
+            for key, value in project_settings.items():
+                if value is not None:
+                    user_data[key] = value
+            user_data['coverageEngine'] = project_settings.get('coverageEngine', CoverageEngine.p1546.value)
+            user_data['projectSettings'] = project_settings
+        if project:
+            user_data['projectSlug'] = project.slug
+            user_data['projectName'] = project.name
+            user_data['projectDescription'] = project.description
+            if project_settings.get('lastSavedAt'):
+                user_data['projectLastSavedAt'] = project_settings.get('lastSavedAt')
+
         return jsonify(user_data), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500

@@ -1,0 +1,62 @@
+{% extends "layouts/base.html" %}
+
+{% block title %}Novo Projeto · ATX Coverage{% endblock %}
+
+{% block content %}
+<div class="container py-4" style="max-width: 720px;">
+    <div class="card shadow-sm">
+        <div class="card-body">
+            <h2 class="card-title mb-3">Criar novo projeto</h2>
+            <p class="text-muted">Defina um espaço de trabalho para centralizar dados de cobertura, ativos e relatórios.</p>
+
+            {% if error %}
+                <div class="alert alert-danger">{{ error }}</div>
+            {% endif %}
+
+            <form method="post" class="needs-validation" novalidate>
+                <div class="mb-3">
+                    <label for="name" class="form-label">Nome do projeto</label>
+                    <input type="text" name="name" id="name" class="form-control" required autofocus>
+                    <div class="invalid-feedback">Informe um nome para o projeto.</div>
+                </div>
+                <div class="mb-3">
+                    <label for="description" class="form-label">Descrição</label>
+                    <textarea name="description" id="description" class="form-control" rows="3" placeholder="Objetivo, cliente ou observações iniciais (opcional)"></textarea>
+                </div>
+                <div class="row">
+                    <div class="col-md-6 mb-3">
+                        <label for="crs" class="form-label">CRS</label>
+                        <input type="text" name="crs" id="crs" class="form-control" value="EPSG:4326">
+                        <div class="form-text">Sistema de referência do projeto.</div>
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <label for="aoi_geojson" class="form-label">AOI (GeoJSON)</label>
+                    <textarea name="aoi_geojson" id="aoi_geojson" class="form-control" rows="4" placeholder='Cole um Polygon/MultiPolygon em GeoJSON (opcional)'></textarea>
+                </div>
+                <div class="d-flex justify-content-end gap-2">
+                    <a href="{{ url_for('projects.list_projects') }}" class="btn btn-outline-secondary">Cancelar</a>
+                    <button type="submit" class="btn btn-brand">Criar projeto</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+(() => {
+    const forms = document.querySelectorAll('.needs-validation');
+    Array.from(forms).forEach((form) => {
+        form.addEventListener('submit', (event) => {
+            if (!form.checkValidity()) {
+                event.preventDefault();
+                event.stopPropagation();
+            }
+            form.classList.add('was-validated');
+        });
+    });
+})();
+</script>
+{% endblock %}

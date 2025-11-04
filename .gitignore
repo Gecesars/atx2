@@ -38,6 +38,7 @@ dist/
 *.bak
 *.zip
 SRTM/
+codex/
 __pycache__/
 __pytest_cache__/
-
+.cache/

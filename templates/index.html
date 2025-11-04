@@ -32,6 +32,10 @@
         <div class="auth-footer">
             <span>Não possui conta? <a href="{{ url_for('ui.register') }}">Registre-se agora</a></span>
         </div>
+        <div class="auth-footer small mt-3 d-flex flex-column gap-1">
+            <a href="{{ url_for('ui.request_password_reset') }}" class="link-secondary">Esqueceu a senha?</a>
+            <a href="{{ url_for('ui.resend_confirmation') }}" class="link-secondary">Reenviar e-mail de confirmação</a>
+        </div>
     </div>
 </section>
 {% endblock %}

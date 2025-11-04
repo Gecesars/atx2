@@ -1,218 +1,331 @@
 {% extends "layouts/base.html" %}
 
-{% block title %}Calcular Cobertura · ATX Coverage{% endblock %}
+{% set project_settings = (project.settings or {}) if project else {} %}
+{% set last_coverage = project_settings.get('lastCoverage') if project_settings else {} %}
+{% set default_radius = project_settings.get('radius') or (last_coverage.get('radius_km') if last_coverage else 20) %}
+{% set last_saved = project_settings.get('lastSavedAt') if project_settings else None %}
+{% set engine_info = {
+    'p1546': {
+        'title': 'Ponto-área · ITU-R P.1546',
+        'subtitle': 'Broadcast FM/TV, serviços VHF/UHF e estimativas regionais.',
+        'detail': 'Considera climatologia, clutter urbano/suburbano e percentuais de tempo/local para gerar manchas 2D.'
+    },
+    'itm': {
+        'title': 'Ponto-a-ponto · ITM / ITU-R P.530',
+        'subtitle': 'Links LOS/NLOS com análise de perfil e estatística de fading.',
+        'detail': 'Utiliza modelos determinísticos para trajetórias específicas, levando em conta curvatura, zonas de Fresnel e clima.'
+    },
+    'pycraf': {
+        'title': 'Pycraf Path Profile',
+        'subtitle': 'Estudos científicos com SRTM/Topodata e clutter customizado.',
+        'detail': 'Pipeline integrável para cenários especiais, extraindo métricas detalhadas de atenuação e ganho direcional.'
+    },
+    'rt3d': {
+        'title': 'Ray Tracing 3D',
+        'subtitle': 'Ambientes urbanos densos com malha 3D e multipercursos.',
+        'detail': 'Simulações determinísticas com reflexões, difrações e espalhamento — requer malhas de edifícios e recursos dedicados.'
+    }
+} %}
+
+{% block title %}Planejar Cobertura · ATX Coverage{% endblock %}
 
 {% block extra_head %}
     <link rel="stylesheet" href="{{ url_for('static', filename='css/pages/cobertura.css') }}">
 {% endblock %}
 
 {% block content %}
-<section class="coverage-container">
-    <header class="coverage-header">
-        <div class="d-flex align-items-center justify-content-between flex-wrap gap-3">
-            <div>
-                <h1>Planejamento de Cobertura</h1>
-                <p>Defina parâmetros de propagação, posicionamento e potência para estimar a área de serviço da sua estação.</p>
-            </div>
-            <div class="d-flex align-items-center gap-3 flex-wrap">
-                <span class="badge-soft">Operador: <span id="userName">-</span></span>
-                <button type="button" class="btn btn-outline-secondary btn-sm" id="refreshDataBtn">Sincronizar dados</button>
+<div class="container py-4">
+    {% if not project %}
+        <div class="alert alert-info shadow-sm">
+            <div class="d-flex flex-column flex-lg-row align-items-lg-center justify-content-lg-between gap-3">
+                <div>
+                    <h2 class="h5 mb-1">Nenhum projeto ativo</h2>
+                    <p class="mb-0">Crie ou selecione um projeto para configurar parâmetros de cobertura e gerar manchas profissionais.</p>
+                </div>
+                <div class="d-flex gap-2">
+                    <a class="btn btn-brand" href="{{ url_for('projects.new_project') }}">Novo projeto</a>
+                    <a class="btn btn-outline-secondary" href="{{ url_for('projects.list_projects') }}">Ir para projetos</a>
+                </div>
             </div>
         </div>
-    </header>
+    {% else %}
+        <div id="coverageAlerts" class="mb-3"></div>
+        <section class="coverage-container" data-project="{{ project.slug }}" data-project-name="{{ project.name }}" data-selected-engine="{{ selected_engine or '' }}">
+            <header class="coverage-header mb-4">
+                <div class="d-flex flex-column flex-lg-row justify-content-lg-between gap-3 align-items-lg-start">
+                    <div>
+                        <small class="text-uppercase text-muted">Projeto ativo</small>
+                        <h1 class="mb-1">{{ project.name }}</h1>
+                        <p class="mb-0 text-muted">{{ project.description or 'Sem descrição cadastrada no projeto.' }}</p>
+                        <div class="text-muted small mt-2">Última atualização: <strong data-role="last-saved">{{ last_saved|default('—') }}</strong></div>
+                    </div>
+                    <div class="d-flex flex-wrap gap-2 justify-content-end">
+                        {% if projects|length > 1 %}
+                            <div>
+                                <label class="form-label visually-hidden" for="projectSwitcher">Selecionar projeto</label>
+                                <select id="projectSwitcher" class="form-select form-select-sm">
+                                    {% for item in projects %}
+                                        <option value="{{ item.slug }}" {% if item.id == project.id %}selected{% endif %}>{{ item.name }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                        {% endif %}
+                        <button type="button" class="btn btn-outline-secondary btn-sm" id="refreshDataBtn">Recarregar parâmetros</button>
+                        <a class="btn btn-outline-primary btn-sm" href="{{ url_for('projects.view_project', slug=project.slug) }}">Metadados do projeto</a>
+                    </div>
+                </div>
+            </header>
 
-    <div class="coverage-highlight">
-        <div>
-            <span>Modelos suportados:</span>
-            <p class="mb-0 text-muted small">ITU-R P.1546 para enlaces ponto-área · ITU-R P.530 para enlaces ponto-a-ponto.</p>
+            <div class="coverage-highlight shadow-sm mb-4">
+                <div>
+                    <span class="text-muted text-uppercase small">Modelos suportados</span>
+                    <p class="mb-0">Selecione o motor de cálculo conforme o cenário: broadcasting, enlaces dedicados ou análises avançadas.</p>
+            </div>
+            <div class="text-end small text-muted">
+                <span>Projeto: {{ project.slug }}</span><br>
+                <span>CRS: {{ project.crs }}</span>
+            </div>
         </div>
-        <div class="text-end">
-            <small class="text-muted d-block">Selecione a localização da torre e configure os níveis de potência antes de gerar a cobertura.</small>
-        </div>
-    </div>
 
-    <form id="coberturaForm">
-        <article class="coverage-card">
-            <h3>Posicionamento da Estação</h3>
-            <div class="coverage-secondary-actions">
-                <button type="button" class="btn btn-outline-primary" id="askCoordinatesBtn">Selecionar no mapa</button>
-                <button type="button" class="btn btn-outline-secondary" id="openManualCoordinatesBtn">Inserir coordenadas manualmente</button>
-            </div>
-            <div class="mb-3">
-                <label for="coordinates" class="form-label">Coordenadas selecionadas</label>
-                <input type="text" class="form-control" id="coordinates" placeholder="Latitude e Longitude" readonly>
-            </div>
-            <div class="location-summary">
-                <span>Município: <strong id="txLocationName">-</strong></span>
-                <span>Altitude TX: <strong id="txElevation">-</strong></span>
-            </div>
-            <div class="form-grid">
-                <div>
-                    <label for="towerHeight" class="form-label">Altura do centro de fase (m)</label>
-                    <input type="number" id="towerHeight" name="towerHeight" class="form-control" min="0" step="any" required>
+        {% if last_coverage %}
+        <article class="coverage-card mb-4">
+            <div class="d-flex flex-column flex-md-row gap-3">
+                <div class="flex-shrink-0" style="max-width: 260px;">
+                    <img src="{{ url_for('projects.asset_preview', slug=project.slug, asset_id=last_coverage['asset_id']) }}"
+                         alt="Pré-visualização da cobertura" class="img-fluid rounded shadow-sm">
                 </div>
-                <div>
-                    <label for="rxHeight" class="form-label">Altura do receptor (m)</label>
-                    <input type="number" id="rxHeight" name="rxHeight" class="form-control" min="0" step="any" required>
-                </div>
-            </div>
-            <div class="mt-3">
-                <button type="button" class="btn btn-outline-primary w-100" onclick="window.location.href='{{ url_for('ui.antena') }}'">
-                    Configurar sistema irradiantes
-                </button>
-            </div>
-        </article>
-
-        <article class="coverage-card">
-            <h3>Dados de Propagação</h3>
-            <div class="form-grid">
-                <div>
-                    <label for="propagationModel" class="form-label">Ambiente de propagação</label>
-                    <select name="propagationModel" id="propagationModel" class="form-select" required>
-                        <option value="">Selecione...</option>
-                        <option value="modelo1">Urbano</option>
-                        <option value="modelo2">Suburbano</option>
-                        <option value="modelo3">Rural</option>
-                        <option value="modelo4">Floresta</option>
-                        <option value="modelo5">Desconhecido</option>
-                    </select>
-                </div>
-                <div>
-                    <label for="serviceType" class="form-label">Tipo de serviço</label>
-                    <select id="serviceType" name="serviceType" class="form-select" required>
-                        <option value="">Selecione...</option>
-                        <option value="RadiodifusaoFM">Radiodifusão FM</option>
-                        <option value="RadiodifusaoTV">Radiodifusão TV</option>
-                        <option value="LinkPontoAPonto">Link ponto a ponto</option>
-                        <option value="Redes4G5G">Redes 4G/5G</option>
-                        <option value="Outros">Outros</option>
-                    </select>
-                </div>
-                <div>
-                    <label for="Total_loss" class="form-label">Perdas totais do sistema (dB)</label>
-                    <input type="number" id="Total_loss" name="Total_loss" class="form-control" min="0" step="any" required>
-                </div>
-            </div>
-            <div class="form-grid">
-                <div>
-                    <label for="timePercentage" class="form-label">Percentual de tempo p (%), ITU-R P.452</label>
-                    <input type="number" id="timePercentage" name="timePercentage" class="form-control" min="0.001" max="50" step="0.1" placeholder="40">
-                    <small class="form-text text-muted">Valor entre 0.001 e 50%. Usado para cenários críticos de disponibilidade.</small>
-                </div>
-                <div>
-                    <label for="polarization" class="form-label">Polarização da emissão</label>
-                    <select id="polarization" name="polarization" class="form-select">
-                        <option value="vertical">Vertical</option>
-                        <option value="horizontal">Horizontal</option>
-                    </select>
-                </div>
-                <div>
-                    <label for="p452Version" class="form-label">Recomendação ITU-R P.452</label>
-                    <select id="p452Version" name="p452Version" class="form-select">
-                        <option value="16">Versão 16 (atual)</option>
-                        <option value="14">Versão 14 (legado)</option>
-                    </select>
+                <div class="flex-grow-1">
+                    <h3 class="mb-3">Última cobertura gerada</h3>
+                    <div class="row g-3 small text-muted">
+                        <div class="col-sm-4">
+                            <div class="fw-semibold text-uppercase">Data</div>
+                            <div>{{ last_coverage['generated_at'] }}</div>
+                        </div>
+                        <div class="col-sm-4">
+                            <div class="fw-semibold text-uppercase">Motor</div>
+                            <div>{{ last_coverage['engine']|upper }}</div>
+                        </div>
+                        <div class="col-sm-4">
+                            <div class="fw-semibold text-uppercase">Raio (km)</div>
+                            <div>{{ last_coverage['radius_km'] }}</div>
+                        </div>
+                    </div>
+                    {% set center_metrics = last_coverage.get('center_metrics') %}
+                    {% if center_metrics %}
+                    <div class="row g-3 small text-muted mt-3">
+                        <div class="col-sm-4">
+                            <div class="fw-semibold text-uppercase">Campo no centro</div>
+                            <div>{{ center_metrics.field_center_dbuv_m|round(2) if center_metrics.field_center_dbuv_m is not none else '—' }} dBµV/m</div>
+                        </div>
+                        <div class="col-sm-4">
+                            <div class="fw-semibold text-uppercase">Potência RX</div>
+                            <div>{{ center_metrics.received_power_center_dbm|round(2) if center_metrics.received_power_center_dbm is not none else '—' }} dBm</div>
+                        </div>
+                        <div class="col-sm-4">
+                            <div class="fw-semibold text-uppercase">Perda total</div>
+                            <div>{{ center_metrics.combined_loss_center_db|round(2) if center_metrics.combined_loss_center_db is not none else '—' }} dB</div>
+                        </div>
+                    </div>
+                    {% endif %}
+                    <div class="mt-3">
+                        <a class="btn btn-sm btn-outline-primary" href="{{ url_for('projects.view_project', slug=project.slug) }}">Ver detalhes do projeto</a>
+                    </div>
                 </div>
             </div>
         </article>
+        {% endif %}
 
-        <article class="coverage-card">
-            <h3>Especificações Técnicas</h3>
-            <div class="form-grid">
-                <div>
-                    <label for="frequency" class="form-label">Frequência (MHz)</label>
-                    <input type="number" id="frequency" name="frequency" class="form-control" min="0" step="any" required>
+        <section class="mb-4">
+            <div class="coverage-methods" role="radiogroup">
+                {% for engine in engines %}
+                    {% set info = engine_info.get(engine.value, {'title': engine.value, 'subtitle': '', 'detail': ''}) %}
+                        {% set is_checked = (selected_engine == engine.value) or (not selected_engine and loop.first) %}
+                        <input type="radio" class="btn-check" name="coverageEngine" id="engine-{{ engine.value }}" value="{{ engine.value }}" {% if is_checked %}checked{% endif %}>
+                        <label class="coverage-method-card btn btn-outline-primary" for="engine-{{ engine.value }}" data-engine="{{ engine.value }}">
+                            <span class="coverage-method-title">{{ info.title }}</span>
+                            <span class="coverage-method-subtitle">{{ info.subtitle }}</span>
+                        </label>
+                    {% endfor %}
                 </div>
-                <div>
-                    <label for="transmissionPower" class="form-label">Potência de transmissão (W)</label>
-                    <input type="number" id="transmissionPower" name="transmissionPower" class="form-control" min="0" step="any" required>
+                {% set active_engine = selected_engine or (engines[0].value if engines else 'p1546') %}
+                {% set active_info = engine_info.get(active_engine, engine_info['p1546']) %}
+                <div class="alert alert-info mt-3" id="engineDescription" data-default-engine="{{ active_engine }}">
+                    <strong id="engineDescriptionTitle">{{ active_info.title }}</strong>
+                    <p class="mb-0" id="engineDescriptionDetail">{{ active_info.detail }}</p>
                 </div>
-                <div>
-                    <label for="antennaGain" class="form-label">Ganho da antena (dBi)</label>
-                    <input type="number" id="antennaGain" name="antennaGain" class="form-control" min="0" step="any" required>
-                </div>
-                <div>
-                    <label for="rxGain" class="form-label">Ganho do receptor (dB)</label>
-                    <input type="number" id="rxGain" name="rxGain" class="form-control" min="0" step="any" required>
-                </div>
-                <div>
-                    <label for="antennaTilt" class="form-label">Tilt elétrico TX (°)</label>
-                    <input type="number" id="antennaTilt" name="antennaTilt" class="form-control" step="0.5" placeholder="0">
-                </div>
-                <div>
-                    <label for="antennaDirection" class="form-label">Azimute da antena (°)</label>
-                    <input type="number" id="antennaDirection" name="antennaDirection" class="form-control" min="0" max="359" step="1" placeholder="0">
-                </div>
-            </div>
-        </article>
+            </section>
 
-        <article class="coverage-card">
-            <h3>Condições Atmosféricas</h3>
-            <div class="form-grid">
-                <div>
-                    <label for="temperature" class="form-label">Temperatura média (°C)</label>
-                    <input type="number" id="temperature" name="temperature" class="form-control" step="0.1" placeholder="20">
-                </div>
-                <div>
-                    <label for="pressure" class="form-label">Pressão atmosférica (hPa)</label>
-                    <input type="number" id="pressure" name="pressure" class="form-control" step="0.1" placeholder="1013">
-                </div>
-                <div>
-                    <label for="waterDensity" class="form-label">Densidade de vapor d'água (g/m³)</label>
-                    <input type="number" id="waterDensity" name="waterDensity" class="form-control" step="0.1" placeholder="7.5">
-                </div>
-            </div>
-            <p class="assist-text">Valores típicos: 20&nbsp;°C, 1013&nbsp;hPa e 7.5&nbsp;g/m³ (condições padrão ITU). Ajuste para refletir o clima local.</p>
-            <button type="button" class="btn btn-outline-secondary" id="loadClimateBtn">Usar dados climáticos estimados (últimos 6 meses)</button>
-            <small class="form-text text-muted" id="climateStatus" hidden></small>
-        </article>
+            <form id="coberturaForm">
+                <article class="coverage-card">
+                    <h3 class="mb-3">Parâmetros de cálculo</h3>
+                    <div class="form-grid">
+                        <div>
+                            <label for="radiusKm" class="form-label" data-bs-toggle="tooltip" title="Raio geográfico da mancha gerada ao redor da estação transmissora.">Raio analisado (km)</label>
+                            <input type="number" id="radiusKm" name="radiusKm" class="form-control" min="1" max="200" step="1" value="{{ default_radius or 20 }}">
+                        </div>
+                        <div>
+                            <label for="minSignalLevel" class="form-label" data-bs-toggle="tooltip" title="Valor mínimo para a escala de cores do campo elétrico (dBµV/m). Deixe em branco para auto-escalar.">Escala mínima (dBµV/m)</label>
+                            <input type="number" id="minSignalLevel" name="minSignalLevel" class="form-control" step="0.1" value="{{ project_settings.get('minSignalLevel') if project_settings.get('minSignalLevel') is not none else '' }}">
+                        </div>
+                        <div>
+                            <label for="maxSignalLevel" class="form-label" data-bs-toggle="tooltip" title="Valor máximo para a escala de cores do campo elétrico (dBµV/m). Deixe em branco para auto-escalar.">Escala máxima (dBµV/m)</label>
+                            <input type="number" id="maxSignalLevel" name="maxSignalLevel" class="form-control" step="0.1" value="{{ project_settings.get('maxSignalLevel') if project_settings.get('maxSignalLevel') is not none else '' }}">
+                        </div>
+                    </div>
+                </article>
+                <article class="coverage-card">
+                    <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-3">
+                        <h3 class="mb-0">Posicionamento da Estação</h3>
+                        <div class="coverage-secondary-actions">
+                            <button type="button" class="btn btn-outline-primary btn-sm" id="askCoordinatesBtn">Selecionar no mapa</button>
+                            <button type="button" class="btn btn-outline-secondary btn-sm" id="openManualCoordinatesBtn">Inserir coordenadas</button>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="coordinates" class="form-label">Coordenadas selecionadas</label>
+                        <input type="text" class="form-control" id="coordinates" placeholder="Latitude e Longitude" readonly>
+                    </div>
+                    <div class="location-summary mb-3">
+                        <span>Município: <strong id="txLocationName">{{ project_settings.get('txLocationName') or '-' }}</strong></span>
+                        <span>Altitude TX: <strong id="txElevation">{{ project_settings.get('txElevation') or '-' }}</strong></span>
+                    </div>
+                    <div class="form-grid">
+                        <div>
+                            <label for="towerHeight" class="form-label">Altura do centro de fase (m)</label>
+                            <input type="number" id="towerHeight" name="towerHeight" class="form-control" min="0" step="any" required>
+                        </div>
+                        <div>
+                            <label for="rxHeight" class="form-label">Altura do receptor (m)</label>
+                            <input type="number" id="rxHeight" name="rxHeight" class="form-control" min="0" step="any" required>
+                        </div>
+                    </div>
+                    <div class="mt-3">
+                        <button type="button" class="btn btn-outline-primary w-100" onclick="window.location.href='{{ url_for('ui.antena') }}'">
+                            Configurar diagramas de antena
+                        </button>
+                    </div>
+                </article>
 
-        <div class="coverage-actions">
-            <button type="button" class="btn btn-outline-secondary" id="saveCoverageBtn">Salvar parâmetros</button>
-            <button type="button" class="btn btn-brand" id="generateCoverageButton" disabled>Gerar cobertura</button>
-            <button type="button" class="btn btn-outline-secondary" onclick="window.location.href='{{ url_for('ui.visualizar_dados_salvos') }}'">Visualizar dados salvos</button>
-            <button type="button" class="btn btn-outline-primary" onclick="window.location.href='{{ url_for('ui.mapa') }}'">Abrir mapa de cobertura</button>
-        </div>
-    </form>
-</section>
+                <article class="coverage-card">
+                    <h3 class="mb-3">Dados de Propagação</h3>
+                    <div class="form-grid">
+                        <div>
+                            <label for="propagationModel" class="form-label">Ambiente de propagação</label>
+                            <select name="propagationModel" id="propagationModel" class="form-select" required>
+                                <option value="">Selecione...</option>
+                                <option value="urbano">Urbano denso</option>
+                                <option value="suburbano">Suburbano</option>
+                                <option value="rural">Rural</option>
+                                <option value="floresta">Floresta / vegetação densa</option>
+                                <option value="custom">Customizado</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="serviceType" class="form-label">Tipo de serviço</label>
+                            <select id="serviceType" name="serviceType" class="form-select" required>
+                                <option value="">Selecione...</option>
+                                <option value="RadiodifusaoFM">Radiodifusão FM</option>
+                                <option value="RadiodifusaoTV">Radiodifusão TV</option>
+                                <option value="LinkPontoAPonto">Link ponto a ponto</option>
+                                <option value="Redes4G5G">Redes 4G/5G</option>
+                                <option value="Outros">Outros</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="Total_loss" class="form-label">Perdas totais do sistema (dB)</label>
+                            <input type="number" id="Total_loss" name="Total_loss" class="form-control" min="0" step="any" required>
+                        </div>
+                    </div>
+                    <div class="form-grid mt-3">
+                        <div>
+                            <label for="timePercentage" class="form-label">Percentual de tempo (%)</label>
+                            <input type="number" id="timePercentage" name="timePercentage" class="form-control" min="0" max="50" step="0.1" value="40">
+                            <div class="form-text">Para radiodifusão sugere-se 50% (campo mediano) ou 20% (recepção crítica).</div>
+                        </div>
+                        <div>
+                            <label for="polarization" class="form-label">Polarização</label>
+                            <select id="polarization" name="polarization" class="form-select">
+                                <option value="vertical">Vertical</option>
+                                <option value="horizontal">Horizontal</option>
+                                <option value="circular">Circular</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="p452Version" class="form-label">Versão ITU-R P.452</label>
+                            <select id="p452Version" name="p452Version" class="form-select">
+                                <option value="16">16 (2015)</option>
+                                <option value="14">14 (2009)</option>
+                            </select>
+                        </div>
+                    </div>
+                </article>
 
-<button id="backToHomeBtn" class="btn btn-outline-primary fixed-back-button">Voltar ao painel</button>
+                <article class="coverage-card">
+                    <h3 class="mb-3">Potência e Antena</h3>
+                    <div class="form-grid">
+                        <div>
+                            <label for="frequency" class="form-label">Frequência (MHz)</label>
+                            <input type="number" id="frequency" name="frequency" class="form-control" min="0" step="any" required>
+                        </div>
+                        <div>
+                            <label for="transmissionPower" class="form-label">Potência de transmissão (W)</label>
+                            <input type="number" id="transmissionPower" name="transmissionPower" class="form-control" min="0" step="any" required>
+                        </div>
+                        <div>
+                            <label for="antennaGain" class="form-label">Ganho da antena (dBi)</label>
+                            <input type="number" id="antennaGain" name="antennaGain" class="form-control" min="0" step="any" required>
+                        </div>
+                        <div>
+                            <label for="rxGain" class="form-label">Ganho do receptor (dB)</label>
+                            <input type="number" id="rxGain" name="rxGain" class="form-control" min="0" step="any" required>
+                        </div>
+                        <div>
+                            <label for="antennaTilt" class="form-label">Tilt elétrico TX (°)</label>
+                            <input type="number" id="antennaTilt" name="antennaTilt" class="form-control" step="0.5" placeholder="0">
+                        </div>
+                        <div>
+                            <label for="antennaDirection" class="form-label">Azimute da antena (°)</label>
+                            <input type="number" id="antennaDirection" name="antennaDirection" class="form-control" min="0" max="359" step="1" placeholder="0">
+                        </div>
+                    </div>
+                </article>
 
-<!-- Modais -->
-<div class="modal fade" id="successModal" tabindex="-1" aria-labelledby="successModalLabel" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title" id="successModalLabel">Dados atualizados</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
-            </div>
-            <div class="modal-body">
-                Configurações salvas com sucesso.
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-brand" data-bs-dismiss="modal">Continuar</button>
-            </div>
-        </div>
-    </div>
+                <article class="coverage-card">
+                    <h3 class="mb-3">Condições Atmosféricas</h3>
+                    <div class="form-grid">
+                        <div>
+                            <label for="temperature" class="form-label">Temperatura média (°C)</label>
+                            <input type="number" id="temperature" name="temperature" class="form-control" step="0.1" placeholder="20">
+                        </div>
+                        <div>
+                            <label for="pressure" class="form-label">Pressão atmosférica (hPa)</label>
+                            <input type="number" id="pressure" name="pressure" class="form-control" step="0.1" placeholder="1013">
+                        </div>
+                        <div>
+                            <label for="waterDensity" class="form-label">Densidade de vapor d'água (g/m³)</label>
+                            <input type="number" id="waterDensity" name="waterDensity" class="form-control" step="0.1" placeholder="7.5">
+                        </div>
+                    </div>
+                    <p class="assist-text">Valores padrão ITU: 20&nbsp;°C, 1013&nbsp;hPa e 7.5&nbsp;g/m³. Ajuste conforme o cenário local.</p>
+                    <div class="d-flex gap-2 flex-wrap align-items-center">
+                        <button type="button" class="btn btn-outline-secondary btn-sm" id="loadClimateBtn">Usar dados climáticos estimados</button>
+                        <small class="form-text text-muted" id="climateStatus" hidden></small>
+                    </div>
+                </article>
+
+                <div class="coverage-actions d-flex flex-wrap gap-2 justify-content-end mt-4">
+                    <button type="button" class="btn btn-outline-secondary" id="saveCoverageBtn">Salvar parâmetros</button>
+                    <button type="button" class="btn btn-brand" id="generateCoverageButton" disabled>Gerar cobertura</button>
+                    <button type="button" class="btn btn-outline-secondary" onclick="window.location.href='{{ url_for('ui.visualizar_dados_salvos') }}'">Visualizar dados salvos</button>
+                    <button type="button" class="btn btn-outline-primary" onclick="window.location.href='{{ url_for('ui.mapa') }}'">Abrir mapa de cobertura</button>
+                    <button type="button" class="btn btn-outline-secondary" id="backToHomeBtn">Voltar ao painel</button>
+                </div>
+            </form>
+        </section>
+    {% endif %}
 </div>
 
-<div class="modal fade" id="errorModal" tabindex="-1" aria-labelledby="errorModalLabel" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title" id="errorModalLabel">Não foi possível salvar</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
-            </div>
-            <div class="modal-body">
-                Ocorreu um erro ao gravar os dados. Verifique as informações e tente novamente.
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Fechar</button>
-            </div>
-        </div>
-    </div>
-</div>
-
+{% if project %}
 <div class="modal fade" id="mapModal" tabindex="-1" aria-labelledby="mapModalLabel" aria-hidden="true" data-bs-backdrop="static">
     <div class="modal-dialog modal-fullscreen">
         <div class="modal-content">
@@ -273,10 +386,13 @@
         </div>
     </div>
 </div>
+{% endif %}
 {% endblock %}
 
 {% block extra_scripts %}
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
     <script src="{{ url_for('static', filename='js/pages/cobertura.js') }}"></script>
-    <script src="https://maps.googleapis.com/maps/api/js?key={{ maps_api_key }}&libraries=visualization,geometry&callback=initMap" async defer></script>
+    {% if project %}
+        <script src="https://maps.googleapis.com/maps/api/js?key={{ maps_api_key }}&libraries=visualization,geometry&callback=initMap" async defer></script>
+    {% endif %}
 {% endblock %}

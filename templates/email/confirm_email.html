@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <title>Confirme sua conta · ATX Coverage</title>
+</head>
+<body style="font-family: Arial, sans-serif; color: #1a1a1a;">
+    <h2>Olá, {{ user.username }}!</h2>
+    <p>Obrigado por se cadastrar no ATX Coverage. Para ativar sua conta e acessar os recursos de projetos e cobertura RF, confirme seu endereço de e-mail clicando no botão abaixo.</p>
+    <p style="margin: 24px 0;">
+        <a href="{{ confirm_url }}" style="background:#0d6efd;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;">Confirmar minha conta</a>
+    </p>
+    <p>Se o botão não funcionar, copie e cole o link em seu navegador:</p>
+    <p style="word-break: break-all;">{{ confirm_url }}</p>
+    <p style="margin-top: 24px;">Se você não solicitou este cadastro, desconsidere este e-mail.</p>
+    <hr style="border:none;border-top:1px solid #ddd;margin:32px 0;">
+    <p style="font-size: 0.9rem; color:#555;">ATX Coverage · Ferramentas de engenharia e planejamento de cobertura.</p>
+</body>
+</html>

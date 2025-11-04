@@ -1,0 +1,9 @@
+Olá, {{ user.username }}!
+
+Recebemos seu cadastro no ATX Coverage. Para ativar sua conta, acesse o link abaixo:
+
+{{ confirm_url }}
+
+Se você não solicitou este cadastro, basta ignorar este e-mail.
+
+ATX Coverage · Ferramentas de engenharia e planejamento de cobertura.

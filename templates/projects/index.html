@@ -1,0 +1,62 @@
+{% extends "layouts/base.html" %}
+
+{% block title %}Projetos · ATX Coverage{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <div class="d-flex align-items-center justify-content-between mb-4">
+        <div>
+            <h2 class="page-heading mb-1">Projetos</h2>
+            <p class="text-muted mb-0">Organize ativos, cálculos e relatórios por área de estudo.</p>
+        </div>
+        <a class="btn btn-brand" href="{{ url_for('projects.new_project') }}">Novo projeto</a>
+    </div>
+
+    {% if projects %}
+        <div class="list-group shadow-sm">
+            {% for project in projects %}
+                {% set project_settings = project.settings or {} %}
+                {% set last_coverage = project_settings.get('lastCoverage') %}
+                <div class="list-group-item py-3">
+                    <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-start gap-3">
+                        <div class="flex-grow-1">
+                            <div class="d-flex justify-content-between align-items-center mb-1 flex-wrap gap-2">
+                                <h5 class="mb-0">{{ project.name }}</h5>
+                                <small class="text-muted">{{ project.created_at.strftime('%d/%m/%Y %H:%M') if project.created_at else '' }}</small>
+                            </div>
+                            {% if project.description %}
+                                <p class="mb-1 text-muted">{{ project.description }}</p>
+                            {% else %}
+                                <p class="mb-1 text-muted fst-italic">Sem descrição cadastrada.</p>
+                            {% endif %}
+                            <div class="d-flex flex-wrap gap-3 text-muted small">
+                                <span data-bs-toggle="tooltip" title="Identificador curto utilizado nas URLs e no armazenamento.">Slug: {{ project.slug }}</span>
+                                <span data-bs-toggle="tooltip" title="Sistema de referência espacial do projeto (EPSG:4326 = latitude/longitude).">CRS: {{ project.crs }}</span>
+                            </div>
+                            {% if last_coverage %}
+                                <div class="d-flex align-items-center gap-3 mt-3">
+                                    <div class="rounded overflow-hidden shadow-sm" style="width: 120px;">
+                                        <img src="{{ url_for('projects.asset_preview', slug=project.slug, asset_id=last_coverage['asset_id']) }}" alt="Prévia da cobertura" class="img-fluid">
+                                    </div>
+                                    <div class="small text-muted">
+                                        <div><strong>Mancha:</strong> {{ last_coverage['engine']|upper }} · {{ last_coverage['radius_km'] }} km</div>
+                                        <div><strong>Gerada em:</strong> {{ last_coverage['generated_at'] }}</div>
+                                    </div>
+                                </div>
+                            {% endif %}
+                        </div>
+                        <div class="btn-group flex-shrink-0">
+                            <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('projects.view_project', slug=project.slug) }}">Detalhes</a>
+                            <a class="btn btn-sm btn-brand" href="{{ url_for('ui.calcular_cobertura', project=project.slug) }}">Planejar cobertura</a>
+                        </div>
+                    </div>
+                </div>
+            {% endfor %}
+        </div>
+    {% else %}
+        <div class="alert alert-info">
+            Nenhum projeto cadastrado. <a href="{{ url_for('projects.new_project') }}" class="alert-link">Crie o primeiro projeto</a> para começar.
+        </div>
+    {% endif %}
+</div>
+{% endblock %}

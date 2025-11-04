@@ -1,0 +1,46 @@
+{% extends "layouts/base.html" %}
+
+{% block title %}Redefinir senha · ATX Coverage{% endblock %}
+
+{% block extra_head %}
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/pages/auth.css') }}">
+{% endblock %}
+
+{% block content %}
+<section class="auth-wrapper">
+    <div class="auth-card">
+        <h2 class="auth-title">Solicitar redefinição de senha</h2>
+        <p class="text-center text-muted mb-4">Informe o e-mail cadastrado para receber o link de redefinição.</p>
+        <form method="post" class="needs-validation" novalidate>
+            <div class="mb-3">
+                <label for="email" class="form-label">E-mail</label>
+                <input type="email" class="form-control" id="email" name="email" required autofocus>
+                <div class="invalid-feedback">Informe um e-mail válido.</div>
+            </div>
+            <div class="d-grid gap-2">
+                <button type="submit" class="btn btn-brand">Enviar instruções</button>
+            </div>
+        </form>
+        <div class="auth-footer mt-3">
+            <a href="{{ url_for('ui.index') }}" class="link-secondary">Voltar para o login</a>
+        </div>
+    </div>
+</section>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+(() => {
+    const forms = document.querySelectorAll('.needs-validation');
+    Array.from(forms).forEach((form) => {
+        form.addEventListener('submit', (event) => {
+            if (!form.checkValidity()) {
+                event.preventDefault();
+                event.stopPropagation();
+            }
+            form.classList.add('was-validated');
+        });
+    });
+})();
+</script>
+{% endblock %}

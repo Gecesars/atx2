@@ -1,0 +1,96 @@
+{
+  "engine": "p1546",
+  "generated_at": "2025-11-04T02:02:00.109870",
+  "request": {
+    "projectSlug": "teste1",
+    "coverageEngine": "p1546",
+    "radius": 30,
+    "minSignalLevel": 10,
+    "maxSignalLevel": 60,
+    "customCenter": {
+      "lat": -22.786636,
+      "lng": -46.40873
+    }
+  },
+  "center_metrics": {
+    "path_type": "1",
+    "combined_loss_center_db": 101.89385936555166,
+    "received_power_center_dbm": -35.631720021407205,
+    "field_center_dbuv_m": 80.5682799785928,
+    "effective_gain_center_db": 3.251839387504642,
+    "tx_power_dbm": 63.01029995663981,
+    "system_losses_db": 1.0,
+    "frequency_mhz": 100.0,
+    "radius_km": 30.0,
+    "distance_center_km": 0.043517168370735715
+  },
+  "loss_components": {
+    "L_b0p": {
+      "min": 0.0,
+      "max": 105.78808170371528,
+      "unit": "dB",
+      "center": 72.00929378384251
+    },
+    "L_bd": {
+      "min": 0.0,
+      "max": 187.88111181549405,
+      "unit": "dB",
+      "center": 101.89385936555165
+    },
+    "L_bs": {
+      "min": 0.0,
+      "max": 1040.0197917072842,
+      "unit": "dB",
+      "center": 240.423645827289
+    },
+    "L_ba": {
+      "min": 0.0,
+      "max": 553.9202833544243,
+      "unit": "dB",
+      "center": 180.9861622714542
+    },
+    "L_b": {
+      "min": 0.0,
+      "max": 187.88111181549408,
+      "unit": "dB",
+      "center": 101.89385936555166
+    },
+    "L_b_corr": {
+      "min": 0.0,
+      "max": 187.88111181549408,
+      "unit": "dB",
+      "center": 101.89385936555166
+    }
+  },
+  "bounds": {
+    "north": -22.49864520735398,
+    "south": -23.068160456185943,
+    "east": -46.08544776788527,
+    "west": -46.7511141743538
+  },
+  "colorbar_bounds": {
+    "north": -22.49864520735398,
+    "south": -22.52712096979558,
+    "east": -46.08544776788527,
+    "west": -46.7511141743538
+  },
+  "scale": {
+    "default_unit": "dbuv",
+    "min": 10.0,
+    "max": 60.0,
+    "units": {
+      "dbuv": {
+        "min": 10.0,
+        "max": 60.0
+      },
+      "dbm": {
+        "min": -111.32653069836545,
+        "max": 46.327212694597414
+      }
+    }
+  },
+  "tx_location": {
+    "lat": -22.786636,
+    "lng": -46.40873
+  }
+}

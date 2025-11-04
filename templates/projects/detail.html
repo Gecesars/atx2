@@ -1,0 +1,230 @@
+{% extends "layouts/base.html" %}
+
+{% set project_settings = project.settings or {} %}
+{% set last_coverage = project_settings.get('lastCoverage') if project_settings else {} %}
+
+{% block title %}{{ project.name }} · Projetos · ATX Coverage{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <div class="d-flex align-items-center justify-content-between flex-wrap gap-3 mb-3">
+        <div>
+            <h2 class="page-heading mb-1">{{ project.name }}</h2>
+            <p class="text-muted mb-0">
+                <span data-bs-toggle="tooltip" title="Identificador curto usado nas URLs e na estrutura de arquivos do projeto.">Slug</span>: {{ project.slug }} ·
+                <span data-bs-toggle="tooltip" title="Sistema de referência espacial do projeto. EPSG:4326 corresponde a coordenadas latitude/longitude (WGS84).">CRS</span>: {{ project.crs }}
+            </p>
+        </div>
+        <div class="d-flex gap-2 flex-wrap">
+            <a class="btn btn-brand" href="{{ url_for('ui.calcular_cobertura', project=project.slug) }}">Planejar cobertura</a>
+            <form method="post" action="{{ url_for('projects.delete_project', slug=project.slug) }}" onsubmit="return confirm('Remover projeto e todos os seus dados?');">
+                <button type="submit" class="btn btn-outline-danger">Remover projeto</button>
+            </form>
+        </div>
+    </div>
+
+    <div class="row g-4">
+        <div class="col-lg-6">
+            <div class="card shadow-sm h-100">
+                <div class="card-body">
+                    <h5 class="card-title mb-3">Metadados</h5>
+                    <form method="post" action="{{ url_for('projects.update_project', slug=project.slug) }}" class="needs-validation" novalidate>
+                        <div class="mb-3">
+                            <label for="name" class="form-label">Nome</label>
+                            <input type="text" class="form-control" id="name" name="name" value="{{ project.name }}" required>
+                            <div class="invalid-feedback">Informe um nome.</div>
+                        </div>
+                        <div class="mb-3">
+                            <label for="description" class="form-label">Descrição</label>
+                            <textarea class="form-control" id="description" name="description" rows="3">{{ project.description or '' }}</textarea>
+                        </div>
+                        <div class="mb-3">
+                            <label for="crs" class="form-label">CRS</label>
+                            <input type="text" class="form-control" id="crs" name="crs" value="{{ project.crs }}">
+                        </div>
+                        <div class="mb-3">
+                            <label for="aoi_geojson" class="form-label">AOI (GeoJSON)</label>
+                            <textarea class="form-control" id="aoi_geojson" name="aoi_geojson" rows="6">{% if project.aoi_geojson %}{{ project.aoi_geojson | tojson(indent=2) }}{% endif %}</textarea>
+                            <div class="form-text">Cole um Polygon/MultiPolygon válido (opcional).</div>
+                        </div>
+                        <div class="d-flex justify-content-end gap-2">
+                            <button type="submit" class="btn btn-brand">Salvar alterações</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-6">
+            <div class="card shadow-sm h-100">
+                <div class="card-body">
+                    <h5 class="card-title mb-3">Resumo</h5>
+                    <dl class="row mb-0">
+                        <dt class="col-sm-4">Criado em</dt>
+                        <dd class="col-sm-8">{{ project.created_at.strftime('%d/%m/%Y %H:%M') if project.created_at else '—' }}</dd>
+                        <dt class="col-sm-4">Atualizado em</dt>
+                        <dd class="col-sm-8">{{ project.updated_at.strftime('%d/%m/%Y %H:%M') if project.updated_at else '—' }}</dd>
+                        <dt class="col-sm-4">Total de assets</dt>
+                        <dd class="col-sm-8">{{ assets|length }}</dd>
+                        <dt class="col-sm-4">Jobs executados</dt>
+                        <dd class="col-sm-8">{{ jobs|length }}</dd>
+                        <dt class="col-sm-4">Relatórios</dt>
+                        <dd class="col-sm-8">{{ reports|length }}</dd>
+                    </dl>
+                </div>
+            </div>
+            {% if last_coverage %}
+            <div class="card shadow-sm mt-4">
+                <div class="card-body">
+                    <h5 class="card-title mb-3">Última cobertura</h5>
+                    <div class="d-flex gap-3 flex-column flex-md-row">
+                        <div class="flex-shrink-0" style="max-width: 220px;">
+                            <img src="{{ url_for('projects.asset_preview', slug=project.slug, asset_id=last_coverage['asset_id']) }}" alt="Prévia da cobertura" class="img-fluid rounded">
+                        </div>
+                        <div class="small text-muted flex-grow-1">
+                            <p class="mb-1"><strong>Gerada em:</strong> {{ last_coverage['generated_at'] }}</p>
+                            <p class="mb-1"><strong>Motor:</strong> {{ last_coverage['engine']|upper }}</p>
+                            <p class="mb-1"><strong>Raio:</strong> {{ last_coverage['radius_km'] }} km</p>
+                            {% set center_metrics = last_coverage.get('center_metrics') %}
+                            {% if center_metrics %}
+                                <p class="mb-1"><strong>Campo no centro:</strong> {{ center_metrics.field_center_dbuv_m|round(2) if center_metrics.field_center_dbuv_m is not none else '—' }} dBµV/m</p>
+                                <p class="mb-1"><strong>Potência RX:</strong> {{ center_metrics.received_power_center_dbm|round(2) if center_metrics.received_power_center_dbm is not none else '—' }} dBm</p>
+                            {% endif %}
+                            <a class="btn btn-sm btn-outline-primary mt-2" href="{{ url_for('projects.asset_preview', slug=project.slug, asset_id=last_coverage['asset_id']) }}" target="_blank">Ver imagem em nova aba</a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="mt-4">
+        <h4 class="mb-3">Assets registrados</h4>
+        {% if assets %}
+            <div class="table-responsive">
+                <table class="table table-bordered align-middle">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Tipo</th>
+                            <th>Caminho</th>
+                            <th>Tamanho</th>
+                            <th>Criado em</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for asset in assets %}
+                            <tr>
+                                <td>{{ asset.type.value if asset.type else '—' }}</td>
+                                <td><code>{{ asset.path }}</code></td>
+                                <td>{{ asset.byte_size or '—' }}</td>
+                                <td>{{ asset.created_at.strftime('%d/%m/%Y %H:%M') if asset.created_at else '—' }}</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% else %}
+            <div class="alert alert-info">Nenhum asset registrado para este projeto.</div>
+        {% endif %}
+    </div>
+
+    <div class="mt-4">
+        <h4 class="mb-3">Jobs de cobertura</h4>
+        {% if jobs %}
+            <div class="table-responsive">
+                <table class="table table-striped align-middle">
+                    <thead class="table-light">
+                        <tr>
+                            <th>ID</th>
+                            <th>Engine</th>
+                            <th>Status</th>
+                            <th>Início</th>
+                            <th>Fim</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for job in jobs %}
+                            <tr>
+                                <td><code>{{ job.id }}</code></td>
+                                <td>{{ job.engine.value if job.engine else '—' }}</td>
+                                <td>{{ job.status.value if job.status else '—' }}</td>
+                                <td>{{ job.started_at.strftime('%d/%m/%Y %H:%M') if job.started_at else '—' }}</td>
+                                <td>{{ job.finished_at.strftime('%d/%m/%Y %H:%M') if job.finished_at else '—' }}</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% else %}
+            <div class="alert alert-secondary">Nenhum job executado ainda.</div>
+        {% endif %}
+    </div>
+
+    <div class="mt-4">
+        <h4 class="mb-3">Relatórios</h4>
+        {% if reports %}
+            <ul class="list-group">
+                {% for report in reports %}
+                    <li class="list-group-item d-flex justify-content-between align-items-start">
+                        <div>
+                            <div class="fw-semibold">{{ report.title }}</div>
+                            <small class="text-muted">{{ report.created_at.strftime('%d/%m/%Y %H:%M') if report.created_at else '—' }}</small>
+                        </div>
+                        <span class="badge bg-light text-dark">{{ report.template_name }}</span>
+                    </li>
+                {% endfor %}
+            </ul>
+        {% else %}
+            <div class="alert alert-secondary">Nenhum relatório gerado.</div>
+        {% endif %}
+    </div>
+
+    <div class="mt-4 mb-5">
+        <h4 class="mb-3">Fontes de dados (DatasetSource)</h4>
+        {% if dataset_sources %}
+            <div class="table-responsive">
+                <table class="table table-hover align-middle">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Tipo</th>
+                            <th>Localizador</th>
+                            <th>Período</th>
+                            <th>Notas</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for ds in dataset_sources %}
+                            <tr>
+                                <td>{{ ds.kind.value if ds.kind else '—' }}</td>
+                                <td><code>{{ ds.locator }}</code></td>
+                                <td>{{ ds.time_range or '—' }}</td>
+                                <td>{{ ds.notes or '—' }}</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% else %}
+            <div class="alert alert-secondary">Nenhuma fonte cadastrada.</div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+(() => {
+    const forms = document.querySelectorAll('.needs-validation');
+    Array.from(forms).forEach((form) => {
+        form.addEventListener('submit', (event) => {
+            if (!form.checkValidity()) {
+                event.preventDefault();
+                event.stopPropagation();
+            }
+            form.classList.add('was-validated');
+        });
+    });
+})();
+</script>
+{% endblock %}
