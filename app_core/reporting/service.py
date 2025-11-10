@@ -53,40 +53,130 @@ def _format_number(value, unit=""):
 
 
 def _estimate_population_impact(snapshot: Dict[str, Any]) -> tuple[list[Dict[str, Any]], int]:
-    entries = _collect_receiver_entries(snapshot, limit=MAX_POP_LOOKUPS * 2)
+    """
+    Estima o impacto populacional filtrando os RX por LIMIAR em dBµV/m (campo elétrico).
+    - Usa os campos do RX: 'field_strength_dbuv_m' ou 'field' (strings como "63.3 dBµV/m" são aceitas).
+    - Deduplica por (municipality, state).
+    - Reaproveita snapshot['ibge_registry'][code] quando disponível.
+    - Chama ibge_api.fetch_demographics_by_city(city, state) apenas quando necessário.
+
+    Observações:
+    - Limiar padrão em dBµV/m pode ser passado no snapshot: snapshot['min_field_dbuv_m'].
+      Se não vier, usa 28.0 dBµV/m por padrão.
+    - Mantém o retorno original: (summary, total).
+    """
+    import re
+
+    def _coerce_float_dbuvm(value) -> float | None:
+        """Extrai float de entradas possivelmente com unidade, ex.: '63.3 dBµV/m', '55,2', 58.0."""
+        if value in (None, ""):
+            return None
+        try:
+            return float(str(value).replace(",", "."))
+        except (TypeError, ValueError):
+            pass
+        m = re.search(r"[-+]?\d+(?:[\.,]\d+)?", str(value))
+        if not m:
+            return None
+        try:
+            return float(m.group(0).replace(",", "."))
+        except (TypeError, ValueError):
+            return None
+
+    # 1) Parâmetros e coleções base
+    receivers = snapshot.get('receivers') or []
     registry = snapshot.get('ibge_registry') or {}
+
+    # Limiar em dBµV/m (pode vir do snapshot; caso contrário, usa 28.0)
+    try:
+        field_threshold_dbuv_m = float(str(snapshot.get('min_field_dbuv_m', 28.0)).replace(",", "."))
+    except (TypeError, ValueError):
+        field_threshold_dbuv_m = 28.0
+
+    shortlisted: list[Dict[str, Any]] = []
+
+    # 2) Coleta e filtro por dBµV/m
+    for rx in receivers:
+        raw_field = rx.get('field_strength_dbuv_m')
+        if raw_field in (None, ""):
+            raw_field = rx.get('field')
+        field_val = _coerce_float_dbuvm(raw_field)
+        if field_val is None or field_val < field_threshold_dbuv_m:
+            continue
+
+        location = rx.get('location') or {}
+        municipality = (
+            rx.get('municipality')
+            or location.get('municipality')
+            or location.get('city')
+            or location.get('cidade')
+        )
+        state = (
+            rx.get('state')
+            or location.get('state')
+            or location.get('uf')
+            or location.get('estado')
+        )
+        if not municipality:
+            # sem município não dá para consultar IBGE
+            continue
+
+        ibge_info = rx.get('ibge') or {}
+        demographics = ibge_info.get('demographics')
+        if isinstance(demographics, dict) and demographics.get('total') is None:
+            demographics = None
+
+        shortlisted.append({
+            "label": rx.get('label') or rx.get('name') or f"RX {len(shortlisted) + 1}",
+            "municipality": municipality,
+            "state": state,
+            "distance_km": rx.get('distance_km') or rx.get('distance'),
+            "power_dbm": rx.get('power_dbm') or rx.get('power'),
+            "field_dbuv_m": field_val,  # já como float
+            "quality": rx.get('quality') or rx.get('status'),
+            "profile": rx.get('profile') or {},
+            "ibge_code": ibge_info.get('code') or ibge_info.get('ibge_code'),
+            "demographics": demographics,
+        })
+
+    # 3) Ordena por campo (desc) para priorizar melhor recepção
+    shortlisted.sort(key=lambda it: (it['field_dbuv_m'] if it['field_dbuv_m'] is not None else -1e9), reverse=True)
+
+    # 4) Deduplica por município/UF e consulta IBGE (com cache)
     summary: list[Dict[str, Any]] = []
     total = 0
     seen: set[tuple[str | None, str | None]] = set()
-    for entry in entries:
+
+    for entry in shortlisted:
         city = entry.get('municipality')
         state = entry.get('state')
-        if not city:
-            continue
         key = (city, state)
         if key in seen:
             continue
         seen.add(key)
+
         demographics = entry.get('demographics')
         code = entry.get('ibge_code')
+
         if not demographics and code and registry.get(code):
             demographics = registry.get(code)
+
         if not demographics:
-            demographics = ibge_api.fetch_demographics_by_city(city, state)
+            try:
+                demographics = ibge_api.fetch_demographics_by_city(city, state)
+            except Exception:
+                demographics = None
+
         population_value = (demographics or {}).get('total')
         summary.append({**entry, 'population': population_value, 'demographics': demographics})
-        if population_value:
-            total += population_value
+        if isinstance(population_value, (int, float)):
+            total += int(population_value)
+
         if len(summary) >= MAX_POP_LOOKUPS:
             break
+
     return summary, total
-def _format_int(value) -> str:
-    if value in (None, ""):
-        return "—"
-    try:
-        return f"{int(value):,}".replace(",", ".")
-    except (TypeError, ValueError):
-        return "—"
+
 
 
 def _wrap_text(c: canvas.Canvas, text: str, x: int, y: int, width_chars: int = 95, line_height: int = 14) -> int:
@@ -321,6 +411,11 @@ def _build_metrics(project: Project, snapshot: Dict[str, Any], center_metrics: D
     settings = project.settings or {}
     user = project.user
     power_w = getattr(user, "transmission_power", None)
+    # === DADOS PARA O CÁLCULO DA ERP ===
+    power_w = getattr(user, "transmission_power", 0)
+    gain_dbi = getattr(user, "antenna_gain", 0)
+    loss_db = getattr(user, "total_loss", 0)
+    # =====================================
     erp_dbm = None
     if power_w not in (None, ""):
         try:
@@ -339,8 +434,12 @@ def _build_metrics(project: Project, snapshot: Dict[str, Any], center_metrics: D
         "rx_power": center_metrics.get("received_power_center_dbm"),
         "loss_center": center_metrics.get("combined_loss_center_db"),
         "gain_center": center_metrics.get("effective_gain_center_db"),
-        "horizontal_peak_to_peak_db": _horizontal_peak_to_peak_db(user),
+        #"horizontal_peak_to_peak_db": _horizontal_peak_to_peak_db(user),
         "climate": settings.get("clima") or snapshot.get("climate_status") or "Não informado",
+        # === CHAVES ADICIONADAS QUE CAUSAVAM O ERRO ===
+        "tx_power_w": power_w,
+        "antenna_gain_dbi": gain_dbi,
+        "losses_db": loss_db
     }
 
 
@@ -542,6 +641,27 @@ def build_analysis_preview(project: Project) -> Dict[str, Any]:
         'link_summary': link_summary_text,
         'link_payload': link_payload,
     }
+
+def _format_int(value) -> str:
+    """
+    Formata inteiros com separador de milhar como ponto (1.234.567).
+    Aceita value numérico ou string (inclui '1.234,56'); arredonda quando for float.
+    Retorna '—' se não for possível converter.
+    """
+    if value in (None, ""):
+        return "—"
+    try:
+        # normaliza vírgula decimal para ponto e remove espaços
+        s = str(value).strip().replace(",", ".")
+        n = float(s)
+        i = int(round(n))
+        return f"{i:,}".replace(",", ".")
+    except (TypeError, ValueError):
+        return "—"
+
+
+
+
 
 
 def generate_analysis_report(project: Project, overrides: Dict[str, Any] | None = None) -> Report:
@@ -946,7 +1066,7 @@ def generate_analysis_report(project: Project, overrides: Dict[str, Any] | None 
             y -= 4
 
     c.setFont('Helvetica-Oblique', 8)
-    c.drawString(40, 40, "Documento interno ATX Coverage — uso restrito.")
+    c.drawString(40, 40, "Documento interno ATX Coverage")
 
     c.save()
 
